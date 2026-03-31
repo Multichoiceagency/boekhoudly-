@@ -1,0 +1,47 @@
+# Dependencies
+node_modules/
+.pnp
+.pnp.js
+
+# Build
+.output/
+.nuxt/
+dist/
+build/
+__pycache__/
+*.py[cod]
+*.egg-info/
+
+# Environment
+.env
+.env.local
+.env.*.local
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Logs
+logs/
+*.log
+npm-debug.log*
+
+# Testing
+coverage/
+.pytest_cache/
+htmlcov/
+
+# Docker
+.docker/
+
+# Misc
+*.bak
+*.tmp
+.claude-flow/
