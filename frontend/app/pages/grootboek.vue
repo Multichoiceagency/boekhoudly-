@@ -66,6 +66,11 @@
           </tr>
         </thead>
         <tbody class="divide-y divide-surface-100">
+          <tr v-if="filteredEntries.length === 0">
+            <td colspan="7" class="px-6 py-12 text-center">
+              <p class="text-sm text-slate-400">Geen boekingen gevonden</p>
+            </td>
+          </tr>
           <tr v-for="entry in filteredEntries" :key="entry.id" class="hover:bg-surface-50">
             <td class="px-6 py-3 text-sm text-slate-600">{{ entry.date }}</td>
             <td class="px-6 py-3 text-sm font-medium text-slate-900">{{ entry.account }}</td>
@@ -95,23 +100,7 @@ const selectedCategory = ref('')
 const searchQuery = ref('')
 const categories = ['Omzet', 'Kosten', 'BTW', 'Bank', 'Afschrijving']
 
-const entries = ref([
-  { id: 1, date: '31-03-2026', account: '8000 - Omzet', description: 'Factuur INV-2026-042 Bakkerij de Vries', category: 'Omzet', debit: 0, credit: 2450, source: 'AI' },
-  { id: 2, date: '31-03-2026', account: '1300 - Debiteuren', description: 'Factuur INV-2026-042 Bakkerij de Vries', category: 'Omzet', debit: 2964.50, credit: 0, source: 'AI' },
-  { id: 3, date: '31-03-2026', account: '1520 - BTW af te dragen', description: 'BTW 21% over INV-2026-042', category: 'BTW', debit: 0, credit: 514.50, source: 'AI' },
-  { id: 4, date: '30-03-2026', account: '4200 - Kantoorkosten', description: 'Google Workspace abonnement', category: 'Kosten', debit: 10.74, credit: 0, source: 'AI' },
-  { id: 5, date: '30-03-2026', account: '1510 - BTW voorbelasting', description: 'BTW 21% Google Workspace', category: 'BTW', debit: 2.25, credit: 0, source: 'AI' },
-  { id: 6, date: '30-03-2026', account: '1100 - Bank', description: 'Betaling Google Ireland Ltd', category: 'Bank', debit: 0, credit: 12.99, source: 'Bank' },
-  { id: 7, date: '29-03-2026', account: '4300 - Vervoerskosten', description: 'NS Business Card maart', category: 'Kosten', debit: 143.85, credit: 0, source: 'AI' },
-  { id: 8, date: '29-03-2026', account: '1510 - BTW voorbelasting', description: 'BTW 9% NS transport', category: 'BTW', debit: 12.95, credit: 0, source: 'AI' },
-  { id: 9, date: '28-03-2026', account: '8000 - Omzet', description: 'Factuur INV-2026-041 WebDesign Studio', category: 'Omzet', debit: 0, credit: 3800, source: 'AI' },
-  { id: 10, date: '28-03-2026', account: '1300 - Debiteuren', description: 'Factuur INV-2026-041 WebDesign Studio', category: 'Omzet', debit: 4598, credit: 0, source: 'AI' },
-  { id: 11, date: '28-03-2026', account: '1520 - BTW af te dragen', description: 'BTW 21% over INV-2026-041', category: 'BTW', debit: 0, credit: 798, source: 'AI' },
-  { id: 12, date: '25-03-2026', account: '4100 - Inventaris', description: 'Bol.com bureaustoelen', category: 'Kosten', debit: 288.43, credit: 0, source: 'Handmatig' },
-  { id: 13, date: '22-03-2026', account: '4600 - Marketingkosten', description: 'Facebook Ads campagne', category: 'Kosten', debit: 206.61, credit: 0, source: 'AI' },
-  { id: 14, date: '20-03-2026', account: '4400 - Communicatiekosten', description: 'KPN zakelijk internet', category: 'Kosten', debit: 37.19, credit: 0, source: 'AI' },
-  { id: 15, date: '15-03-2026', account: '6100 - Afschrijving inventaris', description: 'Afschrijving Q1 2026 kantoorinventaris', category: 'Afschrijving', debit: 625, credit: 0, source: 'AI' },
-])
+const entries = ref<any[]>([])
 
 const filteredEntries = computed(() => {
   let result = entries.value

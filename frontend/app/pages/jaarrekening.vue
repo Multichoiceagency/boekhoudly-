@@ -11,9 +11,10 @@
           <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 10v6m0 0l-3-3m3 3l3-3m2 8H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" /></svg>
           XBRL Export
         </button>
-        <button class="bg-primary-600 text-white px-4 py-2 rounded-lg text-sm font-medium hover:bg-primary-700 transition-colors flex items-center gap-2">
-          <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M17 17h2a2 2 0 002-2v-4a2 2 0 00-2-2H5a2 2 0 00-2 2v4a2 2 0 002 2h2m2 4h6a2 2 0 002-2v-4a2 2 0 00-2-2H9a2 2 0 00-2 2v4a2 2 0 002 2zm8-12V5a2 2 0 00-2-2H9a2 2 0 00-2 2v4h10z" /></svg>
-          PDF Download
+        <button @click="downloadPdf" :disabled="generating" class="bg-primary-600 text-white px-4 py-2 rounded-lg text-sm font-medium hover:bg-primary-700 transition-colors flex items-center gap-2 disabled:opacity-50">
+          <svg v-if="!generating" class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M17 17h2a2 2 0 002-2v-4a2 2 0 00-2-2H5a2 2 0 00-2 2v4a2 2 0 002 2h2m2 4h6a2 2 0 002-2v-4a2 2 0 00-2-2H9a2 2 0 00-2 2v4a2 2 0 002 2zm8-12V5a2 2 0 00-2-2H9a2 2 0 00-2 2v4h10z" /></svg>
+          <svg v-else class="w-4 h-4 animate-spin" fill="none" viewBox="0 0 24 24"><circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4" /><path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" /></svg>
+          {{ generating ? 'Genereren...' : 'PDF Download' }}
         </button>
       </div>
     </div>
@@ -113,13 +114,13 @@
         </div>
 
         <div class="px-6 py-3 bg-red-50"><p class="text-xs font-semibold text-red-700 uppercase">Kosten</p></div>
-        <div v-for="item in wv.kosten" :key="item.name" class="px-6 py-3 flex justify-between">
+        <div v-for="item in kostenList" :key="item.name" class="px-6 py-3 flex justify-between">
           <span class="text-sm text-slate-700">{{ item.name }}</span>
           <span class="text-sm font-medium text-slate-900">{{ fc(item.value) }}</span>
         </div>
         <div class="px-6 py-3 flex justify-between bg-red-50/50">
           <span class="text-sm font-semibold text-red-800">Totaal kosten</span>
-          <span class="text-sm font-bold text-red-800">{{ fc(subtotaal(wv.kosten)) }}</span>
+          <span class="text-sm font-bold text-red-800">{{ fc(subtotaal(kostenList)) }}</span>
         </div>
 
         <div class="px-6 py-4 flex justify-between bg-surface-50">
@@ -173,60 +174,75 @@
 </template>
 
 <script setup lang="ts">
+const ws = useWorkspaceStore()
 const selectedYear = ref('2025')
 const activeTab = ref('Balans')
 const tabs = ['Balans', 'Winst & Verlies', 'Toelichting']
 const xbrlGenerated = ref(false)
 
-const balans = {
+// Compute from store data - totals are dynamic
+const totalRevenue = computed(() => ws.totalRevenue)
+const totalExpenses = computed(() => ws.totalExpenses)
+const outstandingAmount = computed(() => ws.outstandingAmount)
+
+const balans = reactive({
   activa: {
     vast: [
-      { name: 'Materiele vaste activa', value: 8500 },
-      { name: 'Inventaris en inrichting', value: 4200 },
-      { name: 'Computers en apparatuur', value: 3100 },
+      { name: 'Materiele vaste activa', value: 0 },
+      { name: 'Inventaris en inrichting', value: 0 },
+      { name: 'Computers en apparatuur', value: 0 },
     ],
     vlottend: [
-      { name: 'Debiteuren', value: 12450 },
-      { name: 'Overige vorderingen', value: 1800 },
-      { name: 'Liquide middelen', value: 24650 },
+      { name: 'Debiteuren', value: computed(() => outstandingAmount.value) },
+      { name: 'Overige vorderingen', value: 0 },
+      { name: 'Liquide middelen', value: computed(() => totalRevenue.value - totalExpenses.value) },
     ],
   },
   passiva: {
     eigen: [
-      { name: 'Gestort kapitaal', value: 18000 },
-      { name: 'Overige reserves', value: 8200 },
-      { name: 'Resultaat boekjaar', value: 15320 },
+      { name: 'Gestort kapitaal', value: 0 },
+      { name: 'Overige reserves', value: 0 },
+      { name: 'Resultaat boekjaar', value: computed(() => ws.netProfit) },
     ],
     vreemd: [
-      { name: 'Crediteuren', value: 4850 },
-      { name: 'Belastingen en premies', value: 5230 },
-      { name: 'Overige schulden', value: 3100 },
+      { name: 'Crediteuren', value: 0 },
+      { name: 'Belastingen en premies', value: computed(() => Math.round(ws.btwDue)) },
+      { name: 'Overige schulden', value: 0 },
     ],
   },
-}
+})
 
-const wv = {
+const wv = reactive({
   opbrengsten: [
-    { name: 'Netto-omzet', value: 142500 },
-    { name: 'Overige bedrijfsopbrengsten', value: 3200 },
+    { name: 'Netto-omzet', value: computed(() => totalRevenue.value) },
+    { name: 'Overige bedrijfsopbrengsten', value: 0 },
   ],
-  kosten: [
-    { name: 'Inkoopwaarde', value: 12400 },
-    { name: 'Personeelskosten', value: 65000 },
-    { name: 'Huisvestingskosten', value: 14400 },
-    { name: 'Kantoor- en algemene kosten', value: 18200 },
-    { name: 'Vervoerskosten', value: 3600 },
-    { name: 'Marketing en acquisitie', value: 8500 },
-    { name: 'Afschrijvingen', value: 4800 },
-    { name: 'Overige bedrijfskosten', value: 2480 },
-  ],
+  kosten: computed(() => {
+    // Group expenses by category
+    const cats: Record<string, number> = {}
+    ws.expenses.forEach(e => {
+      const cat = e.category || 'Overige bedrijfskosten'
+      cats[cat] = (cats[cat] || 0) + e.amount
+    })
+    if (Object.keys(cats).length === 0) return [{ name: 'Geen kosten', value: 0 }]
+    return Object.entries(cats).map(([name, value]) => ({ name, value }))
+  }),
+})
+
+function subtotaal(items: any[]): number {
+  if (!items || !Array.isArray(items)) return 0
+  return items.reduce((sum, i) => {
+    const v = typeof i.value === 'object' && i.value !== null && 'value' in i.value ? i.value.value : i.value
+    return sum + (Number(v) || 0)
+  }, 0)
 }
 
-function subtotaal(items: { value: number }[]): number {
-  return items.reduce((sum, i) => sum + i.value, 0)
-}
+const kostenList = computed(() => {
+  const items = wv.kosten
+  return Array.isArray(items) ? items : (items as any).value || []
+})
 
-const nettoResultaat = computed(() => subtotaal(wv.opbrengsten) - subtotaal(wv.kosten))
+const nettoResultaat = computed(() => subtotaal(wv.opbrengsten) - subtotaal(kostenList.value))
 
 function fc(v: number): string {
   return '€ ' + v.toLocaleString('nl-NL', { minimumFractionDigits: 0 })
@@ -235,5 +251,20 @@ function fc(v: number): string {
 function generateXBRL() {
   xbrlGenerated.value = true
   setTimeout(() => { xbrlGenerated.value = false }, 5000)
+}
+
+const { generating, generateFromTemplate } = usePdf()
+
+async function downloadPdf() {
+  const { jaarrekeningTemplate } = await import('~/composables/usePdfTemplates')
+  const company = ws.activeCompany
+  const html = jaarrekeningTemplate(
+    selectedYear.value,
+    balans,
+    wv,
+    company?.branding?.companyName || 'Bedrijf',
+    company?.branding || {}
+  )
+  await generateFromTemplate(html, `Jaarrekening-${selectedYear.value}.pdf`)
 }
 </script>

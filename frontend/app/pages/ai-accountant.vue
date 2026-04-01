@@ -114,7 +114,10 @@
     <div class="w-72 flex-shrink-0 space-y-4 overflow-y-auto">
       <div class="bg-white rounded-xl border border-surface-200 shadow-sm p-4">
         <h3 class="text-sm font-semibold text-slate-900 mb-3">AI Inzichten</h3>
-        <div class="space-y-3">
+        <div v-if="insights.length === 0" class="py-4 text-center">
+          <p class="text-xs text-slate-400">Nog geen inzichten beschikbaar</p>
+        </div>
+        <div v-else class="space-y-3">
           <div v-for="insight in insights" :key="insight.title" class="flex gap-2">
             <div class="w-7 h-7 rounded-lg flex items-center justify-center flex-shrink-0" :class="insight.bgColor">
               <span class="text-xs">{{ insight.icon }}</span>
@@ -129,7 +132,10 @@
 
       <div class="bg-white rounded-xl border border-surface-200 shadow-sm p-4">
         <h3 class="text-sm font-semibold text-slate-900 mb-3">Recente Agent Acties</h3>
-        <div class="space-y-3">
+        <div v-if="recentActions.length === 0" class="py-4 text-center">
+          <p class="text-xs text-slate-400">Nog geen acties uitgevoerd</p>
+        </div>
+        <div v-else class="space-y-3">
           <div v-for="action in recentActions" :key="action.text" class="flex gap-2 items-start">
             <span class="w-1.5 h-1.5 rounded-full mt-1.5 flex-shrink-0" :class="action.color"></span>
             <div>
@@ -142,10 +148,10 @@
 
       <div class="bg-gradient-to-br from-primary-500 to-primary-700 rounded-xl p-4 text-white">
         <p class="text-sm font-semibold">AI Confidence Score</p>
-        <p class="text-3xl font-bold mt-1">94,2%</p>
-        <p class="text-xs text-primary-200 mt-1">Gemiddelde over alle agents</p>
+        <p class="text-3xl font-bold mt-1">--</p>
+        <p class="text-xs text-primary-200 mt-1">Nog geen data beschikbaar</p>
         <div class="mt-3 w-full bg-primary-400/30 rounded-full h-2">
-          <div class="bg-white h-2 rounded-full" style="width: 94.2%"></div>
+          <div class="bg-white h-2 rounded-full" style="width: 0%"></div>
         </div>
       </div>
     </div>
@@ -174,58 +180,11 @@ const quickQuestions = [
   'Geef me belastingtips',
 ]
 
-const messages = ref([
-  {
-    role: 'ai',
-    agent: 'AI Accountant',
-    text: 'Goedemorgen! Ik ben je AI Accountant. Ik heb 5 gespecialiseerde agents die samenwerken om je boekhouding te beheren. Stel me een vraag of kies een van de suggesties hieronder.',
-    time: '09:00',
-  },
-  {
-    role: 'user',
-    text: 'Hoeveel btw moet ik betalen dit kwartaal?',
-    time: '09:02',
-  },
-  {
-    role: 'ai',
-    agent: 'BTW Agent',
-    text: 'Op basis van je Q1 2026 transacties:\n\n📊 BTW ontvangen (omzet): € 4.832,10\n📉 BTW betaald (kosten): € 2.221,48\n\n💰 Af te dragen: € 2.610,62\n\n⚠️ Deadline: 30 april 2026\n\nIk heb 28 uitgaande facturen en 45 inkomende transacties geanalyseerd. Alle bedragen zijn geverifieerd met een confidence score van 96,3%. Wil je dat ik de XML aangifte voorbereid?',
-    time: '09:02',
-  },
-])
+const messages = ref<any[]>([])
 
-const insights = [
-  { title: 'BTW deadline 30 april', desc: 'Nog 29 dagen. Aangifte is klaar voor review.', icon: '⏰', bgColor: 'bg-red-100' },
-  { title: 'Besparingskans gevonden', desc: 'Software kosten 23% hoger dan vorig kwartaal.', icon: '💰', bgColor: 'bg-amber-100' },
-  { title: 'Anomalie gedetecteerd', desc: 'Onbekende betaling € 1.250 vereist review.', icon: '🔍', bgColor: 'bg-blue-100' },
-]
+const insights = ref<any[]>([])
 
-const recentActions = [
-  { text: 'Boekhouder Agent: 3 transacties automatisch gecategoriseerd', time: '2 min geleden', color: 'bg-emerald-500' },
-  { text: 'BTW Agent: Q1 aangifte berekening bijgewerkt', time: '15 min geleden', color: 'bg-blue-500' },
-  { text: 'Audit Agent: Dubbele boeking gedetecteerd en gemarkeerd', time: '1 uur geleden', color: 'bg-amber-500' },
-  { text: 'Advisor Agent: Nieuwe belastingtip gegenereerd', time: '2 uur geleden', color: 'bg-purple-500' },
-  { text: 'Accountant Agent: Maandrapport maart afgerond', time: '3 uur geleden', color: 'bg-pink-500' },
-]
-
-const aiResponses: Record<string, { agent: string; text: string }> = {
-  'Waar geef ik teveel uit?': {
-    agent: 'Advisor Agent',
-    text: '📊 Analyse van je uitgavenpatroon Q1 2026:\n\n🔴 Software: € 1.847 (+23% t.o.v. Q4 2025)\n   → 3 overlappende tools gedetecteerd\n\n🟡 Marketing: € 2.100 (+8%)\n   → Facebook Ads ROI is gedaald naar 1,2x\n\n🟢 Transport: € 480 (-12%)\n\n💡 Advies: Evalueer Slack, Teams en Zoom - je betaalt voor 3 vergadertools. Besparing: ~€ 45/maand.',
-  },
-  'Wat is mijn winst dit kwartaal?': {
-    agent: 'Accountant Agent',
-    text: '📈 Winst & Verlies Q1 2026:\n\nOmzet: € 38.450,00\nKosten: € 29.530,00\n──────────────\n✅ Brutowinst: € 8.920,00 (+8,3% t.o.v. Q4 2025)\n\nTop inkomstenbronnen:\n1. WebDesign projecten: € 18.200\n2. Consultancy: € 12.400\n3. Onderhoud contracten: € 7.850\n\nMarge: 23,2% (gezond voor jouw branche)',
-  },
-  'Welke facturen staan open?': {
-    agent: 'Boekhouder Agent',
-    text: '📋 Openstaande facturen (3 stuks, totaal € 10.675):\n\n1. INV-2026-041 - WebDesign Studio\n   € 3.800 | Verzonden 25 mrt | 6 dagen open\n\n2. INV-2026-040 - Groene Hart Catering\n   € 1.275 | Verzonden 20 mrt | 11 dagen open\n\n3. INV-2026-039 - TechStart Nederland\n   ⚠️ € 5.600 | 15 mrt | VERLOPEN (16 dagen)\n\n💡 Advies: Stuur een herinnering naar TechStart Nederland. Wil je dat ik een herinneringsmail opstel?',
-  },
-  'Geef me belastingtips': {
-    agent: 'Advisor Agent',
-    text: '💡 Belastingtips voor jouw situatie:\n\n1. 🏠 Thuiswerkaftrek\n   Je werkt 3 dagen thuis → ca. € 660/jaar aftrekbaar\n\n2. 📱 Zakelijk telefoongebruik\n   70% zakelijk → € 378/jaar BTW terug\n\n3. 🚗 Kilometervergoeding\n   Bij 5.000 km zakelijk: € 1.150 aftrekbaar\n\n4. 💻 Investeringsaftrek (KIA)\n   Investering > € 2.801 → tot 28% extra aftrek\n\n5. 📚 Scholingsaftrek\n   Cursussen/training zijn volledig aftrekbaar\n\n💰 Geschatte extra besparing: € 1.200 - € 1.800/jaar',
-  },
-}
+const recentActions = ref<any[]>([])
 
 function getTime(): string {
   return new Date().toLocaleTimeString('nl-NL', { hour: '2-digit', minute: '2-digit' })
@@ -243,17 +202,12 @@ async function sendMessage(text: string) {
   await new Promise((r) => setTimeout(r, 1500))
   isTyping.value = false
 
-  const preset = aiResponses[userText]
-  if (preset) {
-    messages.value.push({ role: 'ai', agent: preset.agent, text: preset.text, time: getTime() })
-  } else {
-    messages.value.push({
-      role: 'ai',
-      agent: 'AI Accountant',
-      text: `Ik heb je vraag geanalyseerd. Op basis van je administratie:\n\n${userText.includes('btw') || userText.includes('BTW') ? 'Je BTW positie Q1 2026: € 2.610,62 af te dragen voor 30 april.' : userText.includes('factuur') || userText.includes('facturen') ? 'Je hebt 3 openstaande facturen ter waarde van € 10.675.' : userText.includes('winst') ? 'Je brutowinst Q1 2026 bedraagt € 8.920 (+8,3%).' : 'Ik heb je boekhouding doorgenomen. Wil je een specifiek onderwerp bespreken? Ik kan helpen met BTW, facturen, uitgaven, jaarrekening en belastingadvies.'}\n\nKan ik je ergens anders mee helpen?`,
-      time: getTime(),
-    })
-  }
+  messages.value.push({
+    role: 'ai',
+    agent: 'AI Accountant',
+    text: 'Ik heb je vraag ontvangen. Deze functie wordt binnenkort gekoppeld aan de AI backend. Stel gerust een andere vraag.',
+    time: getTime(),
+  })
   scrollToBottom()
 }
 

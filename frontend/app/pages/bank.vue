@@ -6,13 +6,13 @@
     <div class="bg-gradient-to-r from-primary-600 to-primary-800 rounded-xl p-6 text-white">
       <div class="flex items-center justify-between">
         <div>
-          <p class="text-primary-200 text-sm">ING Zakelijke Rekening</p>
-          <p class="text-2xl font-bold mt-1">€ 24.650,83</p>
-          <p class="text-primary-200 text-sm mt-2">NL91 INGB 0001 2345 67</p>
+          <p class="text-primary-200 text-sm">Bankrekening</p>
+          <p class="text-2xl font-bold mt-1">{{ formatCurrency(bankBalance) }}</p>
+          <p class="text-primary-200 text-sm mt-2">{{ transactions.length }} transacties</p>
         </div>
         <div class="text-right">
-          <p class="text-primary-200 text-sm">Laatste sync</p>
-          <p class="text-sm font-medium">Vandaag, 09:15</p>
+          <p class="text-primary-200 text-sm">Status</p>
+          <p class="text-sm font-medium">{{ transactions.length > 0 ? 'Beschikbaar' : 'Geen data' }}</p>
         </div>
       </div>
     </div>
@@ -37,6 +37,11 @@
           </tr>
         </thead>
         <tbody class="divide-y divide-surface-100">
+          <tr v-if="transactions.length === 0">
+            <td colspan="5" class="px-6 py-12 text-center">
+              <p class="text-sm text-slate-400">Geen banktransacties</p>
+            </td>
+          </tr>
           <tr v-for="tx in transactions" :key="tx.id" class="hover:bg-surface-50">
             <td class="px-6 py-3 text-sm text-slate-600">{{ tx.date }}</td>
             <td class="px-6 py-3 text-sm font-medium text-slate-900">{{ tx.description }}</td>
@@ -60,16 +65,15 @@
 </template>
 
 <script setup lang="ts">
-const transactions = [
-  { id: 1, date: '31 mrt', description: 'Betaling Bakkerij de Vries BV', amount: 2450, category: 'Omzet', matched: true },
-  { id: 2, date: '30 mrt', description: 'Google Ireland Ltd', amount: -12.99, category: 'Software', matched: true },
-  { id: 3, date: '29 mrt', description: 'NS Groep NV', amount: -156.80, category: 'Transport', matched: true },
-  { id: 4, date: '28 mrt', description: 'Betaling WebDesign Studio', amount: 3800, category: 'Omzet', matched: true },
-  { id: 5, date: '27 mrt', description: 'Albert Heijn 1032', amount: -34.50, category: '', matched: false },
-  { id: 6, date: '26 mrt', description: 'Bol.com BV', amount: -349.00, category: 'Kantoor', matched: true },
-  { id: 7, date: '25 mrt', description: 'Facebook Ireland', amount: -250.00, category: 'Marketing', matched: true },
-  { id: 8, date: '24 mrt', description: 'KPN BV', amount: -45.00, category: 'Telefoon', matched: true },
-  { id: 9, date: '23 mrt', description: 'Onbekende afschrijving', amount: -1250.00, category: '', matched: false },
-  { id: 10, date: '22 mrt', description: 'TechStart Nederland BV', amount: 5600, category: 'Omzet', matched: true },
-]
+const ws = useWorkspaceStore()
+
+const transactions = computed(() => ws.bankTransactions)
+
+const bankBalance = computed(() => {
+  return ws.bankTransactions.reduce((sum, tx) => sum + tx.amount, 0)
+})
+
+function formatCurrency(value: number): string {
+  return '€ ' + Math.abs(value).toLocaleString('nl-NL', { minimumFractionDigits: 2, maximumFractionDigits: 2 })
+}
 </script>

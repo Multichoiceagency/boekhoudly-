@@ -14,9 +14,10 @@
           <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z" /></svg>
           {{ status === 'ingediend' ? 'Ingediend' : 'Ter goedkeuring sturen' }}
         </button>
-        <button @click="printReport" class="bg-primary-600 text-white px-4 py-2 rounded-lg text-sm font-medium hover:bg-primary-700 flex items-center gap-2">
-          <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M17 17h2a2 2 0 002-2v-4a2 2 0 00-2-2H5a2 2 0 00-2 2v4a2 2 0 002 2h2m2 4h6a2 2 0 002-2v-4a2 2 0 00-2-2H9a2 2 0 00-2 2v4a2 2 0 002 2zm8-12V5a2 2 0 00-2-2H9a2 2 0 00-2 2v4h10z" /></svg>
-          PDF Uitdraaien
+        <button @click="printReport" :disabled="generating" class="bg-primary-600 text-white px-4 py-2 rounded-lg text-sm font-medium hover:bg-primary-700 flex items-center gap-2 disabled:opacity-50">
+          <svg v-if="!generating" class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M17 17h2a2 2 0 002-2v-4a2 2 0 00-2-2H5a2 2 0 00-2 2v4a2 2 0 002 2h2m2 4h6a2 2 0 002-2v-4a2 2 0 00-2-2H9a2 2 0 00-2 2v4a2 2 0 002 2zm8-12V5a2 2 0 00-2-2H9a2 2 0 00-2 2v4h10z" /></svg>
+          <svg v-else class="w-4 h-4 animate-spin" fill="none" viewBox="0 0 24 24"><circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4" /><path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" /></svg>
+          {{ generating ? 'Genereren...' : 'PDF Uitdraaien' }}
         </button>
       </div>
     </div>
@@ -308,8 +309,12 @@ function fc(v: number): string {
   return prefix + Math.abs(v).toLocaleString('nl-NL')
 }
 
-function printReport() {
-  window.print()
+const { generating, generateFromTemplate } = usePdf()
+
+async function printReport() {
+  const { aangifteIBTemplate } = await import('~/composables/usePdfTemplates')
+  const html = aangifteIBTemplate(data, selectedYear.value)
+  await generateFromTemplate(html, `Aangifte-IB-${selectedYear.value}-${data.naam.replace(/\s/g, '_')}.pdf`)
 }
 
 function sendForApproval() {

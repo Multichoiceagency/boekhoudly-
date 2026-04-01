@@ -33,48 +33,46 @@
       <div class="grid grid-cols-1 md:grid-cols-3 gap-6">
         <div>
           <p class="text-sm text-slate-500">BTW ontvangen (omzet)</p>
-          <p class="text-2xl font-bold text-slate-900 mt-1">€ 4.832,10</p>
-          <p class="text-xs text-slate-400 mt-1">Op basis van 28 facturen</p>
+          <p class="text-2xl font-bold text-slate-900 mt-1">{{ formatCurrency(ws.btwCollected) }}</p>
+          <p class="text-xs text-slate-400 mt-1">Op basis van {{ ws.invoices.length }} facturen</p>
         </div>
         <div>
           <p class="text-sm text-slate-500">BTW betaald (kosten)</p>
-          <p class="text-2xl font-bold text-slate-900 mt-1">€ 2.221,48</p>
-          <p class="text-xs text-slate-400 mt-1">Op basis van 45 transacties</p>
+          <p class="text-2xl font-bold text-slate-900 mt-1">{{ formatCurrency(ws.btwPaid) }}</p>
+          <p class="text-xs text-slate-400 mt-1">Op basis van {{ ws.expenses.length }} transacties</p>
         </div>
         <div>
           <p class="text-sm text-slate-500">BTW af te dragen</p>
-          <p class="text-2xl font-bold text-red-600 mt-1">€ 2.610,62</p>
-          <p class="text-xs text-slate-400 mt-1">Deadline: 30 april 2026</p>
+          <p class="text-2xl font-bold text-red-600 mt-1">{{ formatCurrency(ws.btwDue) }}</p>
+          <p class="text-xs text-slate-400 mt-1">Huidig kwartaal</p>
         </div>
       </div>
 
       <!-- Rubrieken breakdown -->
       <div class="mt-6 pt-4 border-t border-surface-200">
         <h3 class="text-sm font-semibold text-slate-700 mb-3">OB Rubrieken</h3>
-        <div class="space-y-2 text-sm">
-          <div class="flex justify-between py-1"><span class="text-slate-600">1a. Leveringen/diensten belast met hoog tarief</span><span class="font-medium">€ 18.688,10</span></div>
-          <div class="flex justify-between py-1"><span class="text-slate-600">1a. Omzetbelasting 21%</span><span class="font-medium">€ 3.924,50</span></div>
-          <div class="flex justify-between py-1"><span class="text-slate-600">1b. Leveringen/diensten belast met laag tarief</span><span class="font-medium">€ 9.513,33</span></div>
-          <div class="flex justify-between py-1"><span class="text-slate-600">1b. Omzetbelasting 9%</span><span class="font-medium">€ 856,20</span></div>
-          <div class="flex justify-between py-1"><span class="text-slate-600">1e. Leveringen/diensten 0%/verlegd</span><span class="font-medium">€ 51,40</span></div>
-          <div class="flex justify-between py-1 border-t border-surface-200 pt-2"><span class="text-slate-600 font-medium">5a. Subtotaal</span><span class="font-bold">€ 4.832,10</span></div>
-          <div class="flex justify-between py-1"><span class="text-slate-600">5b. Voorbelasting</span><span class="font-medium">€ 2.221,48</span></div>
-          <div class="flex justify-between py-2 bg-red-50 rounded-lg px-3 mt-2"><span class="font-semibold text-red-700">5g. Te betalen</span><span class="font-bold text-red-700">€ 2.610,62</span></div>
+        <div v-if="ws.invoices.length === 0 && ws.expenses.length === 0" class="py-4 text-center">
+          <p class="text-sm text-slate-400">Nog geen BTW data beschikbaar</p>
+        </div>
+        <div v-else class="space-y-2 text-sm">
+          <div class="flex justify-between py-1 border-t border-surface-200 pt-2"><span class="text-slate-600 font-medium">5a. Subtotaal</span><span class="font-bold">{{ formatCurrency(ws.btwCollected) }}</span></div>
+          <div class="flex justify-between py-1"><span class="text-slate-600">5b. Voorbelasting</span><span class="font-medium">{{ formatCurrency(ws.btwPaid) }}</span></div>
+          <div class="flex justify-between py-2 bg-red-50 rounded-lg px-3 mt-2"><span class="font-semibold text-red-700">5g. Te betalen</span><span class="font-bold text-red-700">{{ formatCurrency(ws.btwDue) }}</span></div>
         </div>
       </div>
 
       <div class="mt-4 grid grid-cols-3 gap-4">
         <div class="bg-surface-50 rounded-lg p-3">
           <p class="text-xs text-slate-500">21% tarief</p>
-          <p class="text-lg font-bold text-slate-900">€ 3.924,50</p>
+          <p class="text-lg font-bold text-slate-900">{{ formatCurrency(0) }}</p>
         </div>
         <div class="bg-surface-50 rounded-lg p-3">
           <p class="text-xs text-slate-500">9% tarief</p>
-          <p class="text-lg font-bold text-slate-900">€ 856,20</p>
+          <p class="text-lg font-bold text-slate-900">{{ formatCurrency(0) }}</p>
         </div>
         <div class="bg-surface-50 rounded-lg p-3">
           <p class="text-xs text-slate-500">0% / vrijgesteld</p>
-          <p class="text-lg font-bold text-slate-900">€ 51,40</p>
+          <p class="text-lg font-bold text-slate-900">{{ formatCurrency(0) }}</p>
         </div>
       </div>
     </div>
@@ -94,6 +92,11 @@
           </tr>
         </thead>
         <tbody class="divide-y divide-surface-100">
+          <tr v-if="pastFilings.length === 0">
+            <td colspan="6" class="px-6 py-12 text-center">
+              <p class="text-sm text-slate-400">Nog geen eerdere aangiftes</p>
+            </td>
+          </tr>
           <tr v-for="filing in pastFilings" :key="filing.period" class="hover:bg-surface-50">
             <td class="px-6 py-4 text-sm font-medium text-slate-900">{{ filing.period }}</td>
             <td class="px-6 py-4 text-sm text-right text-slate-600">€ {{ filing.collected.toLocaleString('nl-NL', { minimumFractionDigits: 2 }) }}</td>
@@ -120,7 +123,7 @@
         <h2 class="text-lg font-semibold text-slate-900 mb-4">BTW aangifte indienen via Digipoort</h2>
         <div class="bg-amber-50 border border-amber-200 rounded-lg p-4 mb-4">
           <p class="text-sm text-amber-800 font-medium">Let op: Dit dient de aangifte definitief in bij de Belastingdienst.</p>
-          <p class="text-xs text-amber-600 mt-1">Periode: Q1 2026 | Bedrag: € 2.610,62</p>
+          <p class="text-xs text-amber-600 mt-1">Bedrag: {{ formatCurrency(ws.btwDue) }}</p>
         </div>
         <div class="space-y-3 text-sm">
           <div class="flex items-center gap-2"><svg class="w-4 h-4 text-emerald-500" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7" /></svg><span>XML gevalideerd tegen OB-schema</span></div>
@@ -138,16 +141,16 @@
 </template>
 
 <script setup lang="ts">
+const ws = useWorkspaceStore()
 const generating = ref(false)
 const xmlGenerated = ref(false)
 const showSubmitModal = ref(false)
 
-const pastFilings = [
-  { period: 'Q4 2025', collected: 5120.00, paid: 2340.50, balance: 2779.50, status: 'Geaccepteerd' },
-  { period: 'Q3 2025', collected: 4890.00, paid: 3210.00, balance: 1680.00, status: 'Geaccepteerd' },
-  { period: 'Q2 2025', collected: 3650.00, paid: 4100.00, balance: -450.00, status: 'Geaccepteerd' },
-  { period: 'Q1 2025', collected: 4200.00, paid: 2800.00, balance: 1400.00, status: 'Geaccepteerd' },
-]
+const pastFilings = ref<any[]>([])
+
+function formatCurrency(value: number): string {
+  return '€ ' + Math.abs(value).toLocaleString('nl-NL', { minimumFractionDigits: 2, maximumFractionDigits: 2 })
+}
 
 async function generateAangifte() {
   generating.value = true

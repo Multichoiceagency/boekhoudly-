@@ -1,7 +1,7 @@
 import logging
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
-from app.api import auth, upload, transactions, vat, ai
+from app.api import auth, upload, transactions, vat, ai, bank, cloud_storage, perfex, admin, workspace
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -25,6 +25,11 @@ app.include_router(upload.router, prefix="/api")
 app.include_router(transactions.router, prefix="/api")
 app.include_router(vat.router, prefix="/api")
 app.include_router(ai.router, prefix="/api")
+app.include_router(bank.router, prefix="/api")
+app.include_router(cloud_storage.router, prefix="/api")
+app.include_router(perfex.router, prefix="/api")
+app.include_router(admin.router, prefix="/api")
+app.include_router(workspace.router, prefix="/api")
 
 
 @app.get("/health")

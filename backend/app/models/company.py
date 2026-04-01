@@ -1,7 +1,7 @@
 import uuid
 from datetime import datetime
 from sqlalchemy import String, DateTime
-from sqlalchemy.dialects.postgresql import UUID
+from sqlalchemy.dialects.postgresql import UUID, JSONB
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 from app.database import Base
 
@@ -16,6 +16,17 @@ class Company(Base):
     address: Mapped[str | None] = mapped_column(String(500), nullable=True)
     city: Mapped[str | None] = mapped_column(String(100), nullable=True)
     postal_code: Mapped[str | None] = mapped_column(String(10), nullable=True)
+
+    # New fields
+    iban: Mapped[str | None] = mapped_column(String(34), nullable=True)
+    phone: Mapped[str | None] = mapped_column(String(20), nullable=True)
+    industry: Mapped[str | None] = mapped_column(String(100), nullable=True)
+    company_type: Mapped[str | None] = mapped_column(String(20), nullable=True)  # zzp, bv, vof, eenmanszaak
+    fiscal_year_start: Mapped[str | None] = mapped_column(String(5), nullable=True)  # "01-01"
+    logo_url: Mapped[str | None] = mapped_column(String(500), nullable=True)
+    primary_color: Mapped[str | None] = mapped_column(String(7), nullable=True)  # "#059669"
+    settings: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
+
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
 
     users = relationship("User", back_populates="company")

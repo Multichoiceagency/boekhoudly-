@@ -1,5 +1,7 @@
 <template>
   <div class="space-y-6">
+    <WelcomeTour v-if="showWelcome" @close="closeWelcome" />
+
     <!-- Header -->
     <div class="flex items-center justify-between">
       <div>
@@ -21,9 +23,9 @@
         <div class="absolute bottom-0 left-0 w-24 h-24 bg-white/5 rounded-full translate-y-8 -translate-x-8"></div>
         <p class="text-[12px] text-emerald-200 font-medium">Bankrekening</p>
         <p class="text-[11px] text-emerald-300 mt-0.5">ING Zakelijke Rekening</p>
-        <p class="text-[28px] font-bold mt-3">{{ fc(24650.83) }}</p>
+        <p class="text-[28px] font-bold mt-3">{{ fc(bankBalance) }}</p>
         <div class="flex items-center gap-1.5 mt-2">
-          <span class="text-[11px] bg-white/15 px-2 py-0.5 rounded-full">+15% dit kwartaal</span>
+          <span class="text-[11px] bg-white/15 px-2 py-0.5 rounded-full">Huidig saldo</span>
         </div>
         <div class="flex items-center justify-between mt-4 pt-3 border-t border-white/10">
           <NuxtLink to="/bank" class="text-[12px] text-emerald-200 hover:text-white font-medium flex items-center gap-1">
@@ -102,7 +104,7 @@
         <div class="flex items-center justify-between mb-5">
           <div>
             <h2 class="text-[15px] font-bold text-gray-900">Cashflow</h2>
-            <p class="text-[24px] font-bold text-gray-900 mt-1">{{ fc(24650.83) }}</p>
+            <p class="text-[24px] font-bold text-gray-900 mt-1">{{ fc(bankBalance) }}</p>
           </div>
           <div class="flex gap-1 bg-gray-100 p-1 rounded-xl">
             <button class="text-[11px] px-3 py-1 rounded-lg font-medium text-gray-500 hover:text-gray-900">Maand</button>
@@ -110,14 +112,17 @@
           </div>
         </div>
         <!-- Simple bar chart -->
-        <div class="flex items-end gap-3 h-48 mt-4">
-          <div v-for="month in chartData" :key="month.name" class="flex-1 flex flex-col items-center gap-1">
+        <div v-if="chartData.length > 0" class="flex items-end gap-3 h-48 mt-4">
+          <div v-for="month in chartData" :key="month.month" class="flex-1 flex flex-col items-center gap-1">
             <div class="w-full flex flex-col gap-0.5 items-center justify-end h-40">
               <div class="w-full max-w-[40px] bg-emerald-500 rounded-t-lg transition-all" :style="{ height: (month.income / maxVal * 100) + '%' }"></div>
               <div class="w-full max-w-[40px] bg-gray-200 rounded-b-lg transition-all" :style="{ height: (month.expense / maxVal * 100) + '%' }"></div>
             </div>
-            <span class="text-[11px] text-gray-400 font-medium">{{ month.name }}</span>
+            <span class="text-[11px] text-gray-400 font-medium">{{ month.month }}</span>
           </div>
+        </div>
+        <div v-else class="flex items-center justify-center h-48 mt-4">
+          <p class="text-[13px] text-gray-400">Nog geen cashflow data beschikbaar</p>
         </div>
         <div class="flex items-center gap-5 mt-4 pt-3 border-t border-gray-50">
           <span class="flex items-center gap-1.5 text-[11px] text-gray-500"><span class="w-2.5 h-2.5 bg-emerald-500 rounded-sm"></span> Inkomsten</span>
@@ -153,6 +158,11 @@
           </tr>
         </thead>
         <tbody class="divide-y divide-gray-50">
+          <tr v-if="recentActivities.length === 0">
+            <td colspan="6" class="px-6 py-12 text-center">
+              <p class="text-[13px] text-gray-400">Geen recente activiteiten</p>
+            </td>
+          </tr>
           <tr v-for="act in recentActivities" :key="act.id" class="hover:bg-gray-50/50 transition-colors">
             <td class="px-6 py-3"><div class="w-8 h-8 rounded-xl flex items-center justify-center" :class="act.iconBg"><span class="text-sm">{{ act.icon }}</span></div></td>
             <td class="px-6 py-3"><p class="text-[13px] font-medium text-gray-900">{{ act.description }}</p></td>
@@ -173,24 +183,26 @@
 
 <script setup lang="ts">
 const ws = useWorkspaceStore()
+const route = useRoute()
+const router = useRouter()
+const showWelcome = ref(route.query.welcome === 'true')
 
-const chartData = [
-  { name: 'Jan', income: 11200, expense: 8800 },
-  { name: 'Feb', income: 13800, expense: 10700 },
-  { name: 'Mrt', income: 14500, expense: 10030 },
-  { name: 'Apr', income: 8200, expense: 6400 },
-]
-const maxVal = Math.max(...chartData.flatMap(m => [m.income, m.expense]))
+function closeWelcome() {
+  showWelcome.value = false
+  router.replace({ query: {} })
+}
 
-const recentActivities = [
-  { id: 1, icon: '📄', iconBg: 'bg-emerald-50', description: 'Factuur verzonden', ref: 'INV-2026-042', date: '28 mrt 2026', amount: 2964.50, status: 'Betaald', statusClass: 'bg-emerald-50 text-emerald-700' },
-  { id: 2, icon: '💳', iconBg: 'bg-red-50', description: 'Google Workspace', ref: 'EXP-0312', date: '27 mrt 2026', amount: -12.99, status: 'Geboekt', statusClass: 'bg-emerald-50 text-emerald-700' },
-  { id: 3, icon: '🚂', iconBg: 'bg-blue-50', description: 'NS Business Card', ref: 'EXP-0311', date: '26 mrt 2026', amount: -156.80, status: 'Geboekt', statusClass: 'bg-emerald-50 text-emerald-700' },
-  { id: 4, icon: '📄', iconBg: 'bg-emerald-50', description: 'Factuur WebDesign Studio', ref: 'INV-2026-041', date: '25 mrt 2026', amount: 4598, status: 'Verzonden', statusClass: 'bg-amber-50 text-amber-700' },
-  { id: 5, icon: '🛒', iconBg: 'bg-purple-50', description: 'Bol.com bureaustoelen', ref: 'EXP-0310', date: '25 mrt 2026', amount: -349, status: 'Review', statusClass: 'bg-amber-50 text-amber-700' },
-  { id: 6, icon: '📢', iconBg: 'bg-pink-50', description: 'Facebook Ads campagne', ref: 'EXP-0309', date: '22 mrt 2026', amount: -250, status: 'Geboekt', statusClass: 'bg-emerald-50 text-emerald-700' },
-  { id: 7, icon: '⚠️', iconBg: 'bg-red-50', description: 'Factuur TechStart verlopen', ref: 'INV-2026-039', date: '15 mrt 2026', amount: 5600, status: 'Verlopen', statusClass: 'bg-red-50 text-red-700' },
-]
+const chartData = computed(() => ws.revenueByMonth)
+const maxVal = computed(() => {
+  if (chartData.value.length === 0) return 1
+  return Math.max(...chartData.value.flatMap(m => [m.income, m.expense]), 1)
+})
+
+const bankBalance = computed(() => {
+  return ws.bankTransactions.reduce((sum, tx) => sum + tx.amount, 0)
+})
+
+const recentActivities = ref<any[]>([])
 
 function fc(v: number) { return '€ ' + Math.abs(v).toLocaleString('nl-NL', { minimumFractionDigits: 2, maximumFractionDigits: 2 }) }
 </script>

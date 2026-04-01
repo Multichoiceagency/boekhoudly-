@@ -9,9 +9,9 @@
     </div>
 
     <!-- Active company -->
-    <div class="bg-primary-50 border border-primary-200 rounded-xl p-4 flex items-center justify-between">
+    <div v-if="activeBedrijf" class="bg-primary-50 border border-primary-200 rounded-xl p-4 flex items-center justify-between">
       <div class="flex items-center gap-3">
-        <div class="w-10 h-10 bg-primary-600 rounded-lg flex items-center justify-center text-white font-bold">{{ activeBedrijf.naam[0] }}</div>
+        <div class="w-10 h-10 bg-primary-600 rounded-lg flex items-center justify-center text-white font-bold">{{ activeBedrijf.naam ? activeBedrijf.naam[0] : '?' }}</div>
         <div>
           <p class="text-sm font-semibold text-primary-900">{{ activeBedrijf.naam }}</p>
           <p class="text-xs text-primary-600">Actief bedrijf | KvK: {{ activeBedrijf.kvk }}</p>
@@ -40,11 +40,11 @@
             <div v-if="holdingBedrijf" class="w-px h-6 bg-slate-300"></div>
             <div
               class="rounded-xl p-4 w-64 text-center border-2 cursor-pointer transition-all hover:shadow-md"
-              :class="bedrijf.id === activeBedrijf.id ? 'border-primary-500 bg-primary-50' : 'border-surface-200 bg-white'"
+              :class="activeBedrijf && bedrijf.id === activeBedrijf.id ? 'border-primary-500 bg-primary-50' : 'border-surface-200 bg-white'"
               @click="switchBedrijf(bedrijf)"
             >
               <div class="flex items-center justify-center gap-2">
-                <div class="w-8 h-8 rounded-lg flex items-center justify-center text-sm font-bold" :class="bedrijf.id === activeBedrijf.id ? 'bg-primary-600 text-white' : 'bg-surface-200 text-slate-600'">
+                <div class="w-8 h-8 rounded-lg flex items-center justify-center text-sm font-bold" :class="activeBedrijf && bedrijf.id === activeBedrijf.id ? 'bg-primary-600 text-white' : 'bg-surface-200 text-slate-600'">
                   {{ bedrijf.naam[0] }}
                 </div>
                 <div class="text-left">
@@ -79,10 +79,15 @@
           </tr>
         </thead>
         <tbody class="divide-y divide-surface-100">
-          <tr v-for="b in bedrijven" :key="b.id" class="hover:bg-surface-50" :class="b.id === activeBedrijf.id ? 'bg-primary-50/50' : ''">
+          <tr v-if="bedrijven.length === 0">
+            <td colspan="8" class="px-6 py-12 text-center">
+              <p class="text-sm text-slate-400">Geen bedrijven gevonden</p>
+            </td>
+          </tr>
+          <tr v-for="b in bedrijven" :key="b.id" class="hover:bg-surface-50" :class="activeBedrijf && b.id === activeBedrijf.id ? 'bg-primary-50/50' : ''">
             <td class="px-6 py-4">
               <div class="flex items-center gap-3">
-                <div class="w-8 h-8 rounded-lg flex items-center justify-center text-sm font-bold" :class="b.id === activeBedrijf.id ? 'bg-primary-600 text-white' : 'bg-surface-200 text-slate-600'">{{ b.naam[0] }}</div>
+                <div class="w-8 h-8 rounded-lg flex items-center justify-center text-sm font-bold" :class="activeBedrijf && b.id === activeBedrijf.id ? 'bg-primary-600 text-white' : 'bg-surface-200 text-slate-600'">{{ b.naam[0] }}</div>
                 <div>
                   <p class="text-sm font-medium text-slate-900">{{ b.naam }}</p>
                   <p class="text-xs text-slate-500">{{ b.activiteiten }}</p>
@@ -102,7 +107,7 @@
             <td class="px-6 py-4">
               <div class="flex gap-2">
                 <button @click="switchBedrijf(b)" class="text-primary-600 hover:text-primary-700 text-sm font-medium">
-                  {{ b.id === activeBedrijf.id ? 'Actief' : 'Activeer' }}
+                  {{ activeBedrijf && b.id === activeBedrijf.id ? 'Actief' : 'Activeer' }}
                 </button>
                 <button @click="selectedBedrijf = b" class="text-slate-400 hover:text-slate-600">
                   <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15.232 5.232l3.536 3.536m-2.036-5.036a2.5 2.5 0 113.536 3.536L6.5 21.036H3v-3.572L16.732 3.732z" /></svg>
@@ -166,6 +171,7 @@
 </template>
 
 <script setup lang="ts">
+const ws = useWorkspaceStore()
 const showAddModal = ref(false)
 const selectedBedrijf = ref<any>(null)
 
@@ -181,22 +187,29 @@ const allAgents = [
   { key: 'advisor', icon: '💡', name: 'Advisor', desc: 'Belastingtips & besparing' },
 ]
 
-const bedrijven = reactive([
-  { id: 1, naam: 'De Vries Holding BV', type: 'BV (Holding)', kvk: '87654321', btw: 'NL987654321B01', activiteiten: 'Houdstermaatschappij', omzet: 0, winst: 0, parentId: null, agents: ['accountant', 'advisor'] },
-  { id: 2, naam: 'De Vries Digital BV', type: 'BV (Werk-BV)', kvk: '12345678', btw: 'NL123456789B01', activiteiten: 'Communicatie- en grafisch ontwerp', omzet: 142500, winst: 35398, parentId: 1, agents: ['boekhouder', 'btw', 'audit', 'accountant', 'advisor'] },
-  { id: 3, naam: 'De Vries Consulting', type: 'Eenmanszaak', kvk: '34567890', btw: 'NL345678901B01', activiteiten: 'Management consultancy', omzet: 48000, winst: 22000, parentId: null, agents: ['boekhouder', 'btw', 'accountant'] },
-])
+const bedrijven = computed(() => ws.companies.map(c => ({
+  id: c.id,
+  naam: c.name,
+  type: c.type,
+  kvk: c.kvk,
+  btw: c.btw,
+  activiteiten: c.activiteiten,
+  omzet: 0,
+  winst: 0,
+  parentId: c.parentId,
+  agents: c.agents,
+})))
 
-const activeBedrijf = ref(bedrijven[1])
-const holdingBedrijf = computed(() => bedrijven.find((b) => b.type.includes('Holding')))
-const werkbedrijven = computed(() => bedrijven.filter((b) => !b.type.includes('Holding')))
+const activeBedrijf = computed(() => bedrijven.value.length > 0 ? bedrijven.value[0] : null)
+const holdingBedrijf = computed(() => bedrijven.value.find((b) => b.type.includes('Holding')) || null)
+const werkbedrijven = computed(() => bedrijven.value.filter((b) => !b.type.includes('Holding')))
 
 function fc(v: number): string {
   return '€ ' + v.toLocaleString('nl-NL')
 }
 
 function switchBedrijf(b: any) {
-  activeBedrijf.value = b
+  if (b && b.id) ws.switchCompany(b.id)
 }
 
 function toggleAgent(key: string) {
