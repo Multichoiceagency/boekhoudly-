@@ -3,210 +3,194 @@
     <!-- Header -->
     <div class="flex items-center justify-between">
       <div>
-        <h1 class="text-2xl font-bold text-slate-900">Goedemorgen, Jan!</h1>
-        <p class="text-slate-500 mt-1">{{ currentDate }}</p>
+        <h1 class="text-[22px] font-bold text-gray-900">Overzicht</h1>
+        <p class="text-[13px] text-gray-500 mt-0.5">Financieel overzicht van je bedrijf</p>
       </div>
       <div class="flex gap-2">
-        <NuxtLink to="/ai-accountant" class="bg-primary-600 text-white px-4 py-2 rounded-lg text-sm font-medium hover:bg-primary-700 transition-colors flex items-center gap-2">
-          <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 10V3L4 14h7v7l9-11h-7z" /></svg>
-          AI Accountant
+        <select class="px-3 py-2 bg-white border border-gray-200 rounded-xl text-[13px] text-gray-600 font-medium">
+          <option>Deze maand</option><option>Dit kwartaal</option><option>Dit jaar</option>
+        </select>
+      </div>
+    </div>
+
+    <!-- Balance Cards -->
+    <div class="grid grid-cols-1 md:grid-cols-3 gap-5">
+      <!-- Main Balance -->
+      <div class="bg-gradient-to-br from-emerald-600 to-emerald-800 rounded-2xl p-6 text-white relative overflow-hidden">
+        <div class="absolute top-0 right-0 w-32 h-32 bg-white/5 rounded-full -translate-y-8 translate-x-8"></div>
+        <div class="absolute bottom-0 left-0 w-24 h-24 bg-white/5 rounded-full translate-y-8 -translate-x-8"></div>
+        <p class="text-[12px] text-emerald-200 font-medium">Bankrekening</p>
+        <p class="text-[11px] text-emerald-300 mt-0.5">ING Zakelijke Rekening</p>
+        <p class="text-[28px] font-bold mt-3">{{ fc(24650.83) }}</p>
+        <div class="flex items-center gap-1.5 mt-2">
+          <span class="text-[11px] bg-white/15 px-2 py-0.5 rounded-full">+15% dit kwartaal</span>
+        </div>
+        <div class="flex items-center justify-between mt-4 pt-3 border-t border-white/10">
+          <NuxtLink to="/bank" class="text-[12px] text-emerald-200 hover:text-white font-medium flex items-center gap-1">
+            Bekijk details <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M17 8l4 4m0 0l-4 4m4-4H3" /></svg>
+          </NuxtLink>
+        </div>
+      </div>
+
+      <!-- Revenue -->
+      <div class="bg-white rounded-2xl border border-gray-100 p-6">
+        <div class="flex items-center justify-between">
+          <p class="text-[12px] text-gray-500 font-medium">Omzet dit kwartaal</p>
+          <div class="w-8 h-8 bg-emerald-50 rounded-xl flex items-center justify-center"><svg class="w-4 h-4 text-emerald-600" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 7h8m0 0v8m0-8l-8 8-4-4-6 6" /></svg></div>
+        </div>
+        <p class="text-[26px] font-bold text-gray-900 mt-2">{{ fc(ws.totalRevenue) }}</p>
+        <div class="flex items-center gap-1.5 mt-2">
+          <span class="text-[11px] text-emerald-600 font-semibold bg-emerald-50 px-2 py-0.5 rounded-full">+12,5%</span>
+          <span class="text-[11px] text-gray-400">t.o.v. vorig kwartaal</span>
+        </div>
+        <NuxtLink to="/rapportage" class="text-[12px] text-gray-400 hover:text-emerald-600 font-medium flex items-center gap-1 mt-4 pt-3 border-t border-gray-50">
+          Bekijk rapportage <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M17 8l4 4m0 0l-4 4m4-4H3" /></svg>
+        </NuxtLink>
+      </div>
+
+      <!-- Openstaand -->
+      <div class="bg-white rounded-2xl border border-gray-100 p-6">
+        <div class="flex items-center justify-between">
+          <p class="text-[12px] text-gray-500 font-medium">Openstaande facturen</p>
+          <div class="w-8 h-8 bg-amber-50 rounded-xl flex items-center justify-center"><svg class="w-4 h-4 text-amber-600" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z" /></svg></div>
+        </div>
+        <p class="text-[26px] font-bold text-gray-900 mt-2">{{ fc(ws.outstandingAmount) }}</p>
+        <div class="flex items-center gap-1.5 mt-2">
+          <span class="text-[11px] text-amber-600 font-semibold bg-amber-50 px-2 py-0.5 rounded-full">{{ ws.outstandingInvoices.length }} facturen</span>
+          <span class="text-[11px] text-gray-400">openstaand</span>
+        </div>
+        <NuxtLink to="/facturen" class="text-[12px] text-gray-400 hover:text-emerald-600 font-medium flex items-center gap-1 mt-4 pt-3 border-t border-gray-50">
+          Bekijk facturen <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M17 8l4 4m0 0l-4 4m4-4H3" /></svg>
         </NuxtLink>
       </div>
     </div>
 
-    <!-- Stat Cards -->
-    <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6">
-      <StatCard title="Omzet deze maand" value="€ 12.430" change="+12,5%" color="primary" trend="up" />
-      <StatCard title="Openstaande facturen" value="€ 10.675" change="3 facturen" color="amber" trend="neutral" />
-      <StatCard title="BTW dit kwartaal" value="€ 2.611" change="Q1 2026" color="emerald" trend="neutral" />
-      <StatCard title="Winst / Verlies" value="+ € 8.920" change="+8,3%" color="green" trend="up" />
-    </div>
-
-    <!-- Charts Row -->
-    <div class="grid grid-cols-1 lg:grid-cols-2 gap-6">
-      <!-- Cashflow Chart -->
-      <div class="bg-white rounded-xl border border-surface-200 shadow-sm p-6">
-        <h2 class="text-lg font-semibold text-slate-900 mb-4">Cashflow</h2>
-        <div class="space-y-3">
-          <div v-for="month in cashflowData" :key="month.name" class="flex items-center gap-3">
-            <span class="text-xs text-slate-500 w-8">{{ month.name }}</span>
-            <div class="flex-1 flex gap-1 h-6">
-              <div class="bg-emerald-500 rounded-l h-full" :style="{ width: (month.income / maxCashflow * 100) + '%' }"></div>
-              <div class="bg-red-400 rounded-r h-full" :style="{ width: (month.expense / maxCashflow * 100) + '%' }"></div>
-            </div>
-            <span class="text-xs font-medium w-16 text-right" :class="month.income - month.expense > 0 ? 'text-emerald-600' : 'text-red-600'">
-              {{ month.income - month.expense > 0 ? '+' : '' }}€ {{ ((month.income - month.expense) / 1000).toFixed(1) }}k
-            </span>
-          </div>
+    <!-- Wallet + Cash Flow -->
+    <div class="grid grid-cols-1 lg:grid-cols-5 gap-5">
+      <!-- BTW & Wallet -->
+      <div class="lg:col-span-2 bg-white rounded-2xl border border-gray-100 p-6">
+        <div class="flex items-center justify-between mb-5">
+          <h2 class="text-[15px] font-bold text-gray-900">Financieel Overzicht</h2>
         </div>
-        <div class="flex items-center gap-4 mt-4 text-xs text-slate-500">
-          <span class="flex items-center gap-1"><span class="w-3 h-3 bg-emerald-500 rounded"></span> Inkomsten</span>
-          <span class="flex items-center gap-1"><span class="w-3 h-3 bg-red-400 rounded"></span> Uitgaven</span>
-        </div>
-      </div>
-
-      <!-- Winst/Verlies -->
-      <div class="bg-white rounded-xl border border-surface-200 shadow-sm p-6">
-        <h2 class="text-lg font-semibold text-slate-900 mb-4">Winst & Verlies Q1 2026</h2>
         <div class="space-y-4">
+          <div class="flex items-center justify-between py-3 px-4 bg-emerald-50 rounded-xl">
+            <div class="flex items-center gap-3">
+              <div class="w-8 h-8 bg-emerald-600 rounded-lg flex items-center justify-center text-white text-[11px] font-bold">W</div>
+              <div><p class="text-[13px] font-semibold text-gray-900">Winst Q1</p><p class="text-[11px] text-gray-500">Omzet - kosten</p></div>
+            </div>
+            <div class="text-right"><p class="text-[15px] font-bold text-emerald-700">{{ fc(ws.netProfit) }}</p><p class="text-[10px] text-emerald-600">+8,3%</p></div>
+          </div>
+          <div class="flex items-center justify-between py-3 px-4 bg-red-50 rounded-xl">
+            <div class="flex items-center gap-3">
+              <div class="w-8 h-8 bg-red-500 rounded-lg flex items-center justify-center text-white text-[11px] font-bold">B</div>
+              <div><p class="text-[13px] font-semibold text-gray-900">BTW af te dragen</p><p class="text-[11px] text-gray-500">Deadline 30 april</p></div>
+            </div>
+            <div class="text-right"><p class="text-[15px] font-bold text-red-600">{{ fc(ws.btwDue) }}</p><p class="text-[10px] text-red-500">Q1 2026</p></div>
+          </div>
+          <div class="flex items-center justify-between py-3 px-4 bg-blue-50 rounded-xl">
+            <div class="flex items-center gap-3">
+              <div class="w-8 h-8 bg-blue-500 rounded-lg flex items-center justify-center text-white text-[11px] font-bold">K</div>
+              <div><p class="text-[13px] font-semibold text-gray-900">Totaal kosten</p><p class="text-[11px] text-gray-500">{{ ws.expenses.length }} transacties</p></div>
+            </div>
+            <div class="text-right"><p class="text-[15px] font-bold text-gray-900">{{ fc(ws.totalExpenses) }}</p><p class="text-[10px] text-gray-500">deze maand</p></div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Cash Flow Chart -->
+      <div class="lg:col-span-3 bg-white rounded-2xl border border-gray-100 p-6">
+        <div class="flex items-center justify-between mb-5">
           <div>
-            <div class="flex justify-between text-sm mb-1"><span class="text-slate-600">Omzet</span><span class="font-medium text-slate-900">€ 38.450</span></div>
-            <div class="w-full bg-surface-200 rounded-full h-3"><div class="bg-emerald-500 h-3 rounded-full" style="width: 100%"></div></div>
+            <h2 class="text-[15px] font-bold text-gray-900">Cashflow</h2>
+            <p class="text-[24px] font-bold text-gray-900 mt-1">{{ fc(24650.83) }}</p>
           </div>
-          <div>
-            <div class="flex justify-between text-sm mb-1"><span class="text-slate-600">Kosten</span><span class="font-medium text-slate-900">€ 29.530</span></div>
-            <div class="w-full bg-surface-200 rounded-full h-3"><div class="bg-red-400 h-3 rounded-full" style="width: 76.8%"></div></div>
+          <div class="flex gap-1 bg-gray-100 p-1 rounded-xl">
+            <button class="text-[11px] px-3 py-1 rounded-lg font-medium text-gray-500 hover:text-gray-900">Maand</button>
+            <button class="text-[11px] px-3 py-1 rounded-lg font-medium bg-emerald-600 text-white">Kwartaal</button>
           </div>
-          <div class="pt-3 border-t border-surface-200">
-            <div class="flex justify-between"><span class="text-sm font-semibold text-slate-900">Brutowinst</span><span class="text-lg font-bold text-emerald-600">€ 8.920</span></div>
-            <p class="text-xs text-slate-500 mt-1">Marge: 23,2% | +8,3% t.o.v. Q4 2025</p>
-          </div>
-          <div class="grid grid-cols-3 gap-2 pt-2">
-            <div class="bg-surface-50 rounded-lg p-2 text-center">
-              <p class="text-xs text-slate-500">Jan</p>
-              <p class="text-sm font-bold text-emerald-600">€ 2.4k</p>
+        </div>
+        <!-- Simple bar chart -->
+        <div class="flex items-end gap-3 h-48 mt-4">
+          <div v-for="month in chartData" :key="month.name" class="flex-1 flex flex-col items-center gap-1">
+            <div class="w-full flex flex-col gap-0.5 items-center justify-end h-40">
+              <div class="w-full max-w-[40px] bg-emerald-500 rounded-t-lg transition-all" :style="{ height: (month.income / maxVal * 100) + '%' }"></div>
+              <div class="w-full max-w-[40px] bg-gray-200 rounded-b-lg transition-all" :style="{ height: (month.expense / maxVal * 100) + '%' }"></div>
             </div>
-            <div class="bg-surface-50 rounded-lg p-2 text-center">
-              <p class="text-xs text-slate-500">Feb</p>
-              <p class="text-sm font-bold text-emerald-600">€ 3.1k</p>
-            </div>
-            <div class="bg-surface-50 rounded-lg p-2 text-center">
-              <p class="text-xs text-slate-500">Mrt</p>
-              <p class="text-sm font-bold text-emerald-600">€ 3.4k</p>
-            </div>
+            <span class="text-[11px] text-gray-400 font-medium">{{ month.name }}</span>
           </div>
+        </div>
+        <div class="flex items-center gap-5 mt-4 pt-3 border-t border-gray-50">
+          <span class="flex items-center gap-1.5 text-[11px] text-gray-500"><span class="w-2.5 h-2.5 bg-emerald-500 rounded-sm"></span> Inkomsten</span>
+          <span class="flex items-center gap-1.5 text-[11px] text-gray-500"><span class="w-2.5 h-2.5 bg-gray-200 rounded-sm"></span> Uitgaven</span>
         </div>
       </div>
     </div>
 
-    <!-- BTW + Agents Row -->
-    <div class="grid grid-cols-1 lg:grid-cols-3 gap-6">
-      <!-- BTW Positie -->
-      <div class="bg-white rounded-xl border border-surface-200 shadow-sm p-6">
-        <h2 class="text-sm font-semibold text-slate-900 mb-3">BTW Positie Q1</h2>
-        <div class="text-center py-4">
-          <p class="text-3xl font-bold text-red-600">€ 2.610,62</p>
-          <p class="text-xs text-slate-500 mt-1">Af te dragen</p>
-        </div>
-        <div class="space-y-2">
-          <div class="flex justify-between text-sm"><span class="text-slate-600">BTW ontvangen</span><span class="font-medium">€ 4.832,10</span></div>
-          <div class="flex justify-between text-sm"><span class="text-slate-600">BTW betaald</span><span class="font-medium">€ 2.221,48</span></div>
-        </div>
-        <div class="mt-4 p-3 bg-red-50 border border-red-200 rounded-lg">
-          <p class="text-xs font-medium text-red-700">Deadline: 30 april 2026 (29 dagen)</p>
-        </div>
-        <NuxtLink to="/btw" class="mt-3 block text-center text-sm font-medium text-primary-600 hover:text-primary-700">Bekijk aangifte →</NuxtLink>
-      </div>
-
-      <!-- Recent Transactions -->
-      <div class="lg:col-span-2 bg-white rounded-xl border border-surface-200 shadow-sm">
-        <div class="px-6 py-4 border-b border-surface-200 flex items-center justify-between">
-          <h2 class="text-lg font-semibold text-slate-900">Recente transacties</h2>
-          <NuxtLink to="/bank" class="text-sm text-primary-600 hover:text-primary-700 font-medium">Bekijk alle</NuxtLink>
-        </div>
-        <div class="overflow-x-auto">
-          <table class="w-full">
-            <thead>
-              <tr class="text-left text-xs font-medium text-slate-500 uppercase tracking-wider">
-                <th class="px-6 py-3">Datum</th>
-                <th class="px-6 py-3">Omschrijving</th>
-                <th class="px-6 py-3">Categorie</th>
-                <th class="px-6 py-3 text-right">Bedrag</th>
-              </tr>
-            </thead>
-            <tbody class="divide-y divide-surface-100">
-              <tr v-for="tx in recentTransactions" :key="tx.id" class="hover:bg-surface-50">
-                <td class="px-6 py-3 text-sm text-slate-600">{{ tx.date }}</td>
-                <td class="px-6 py-3 text-sm font-medium text-slate-900">{{ tx.description }}</td>
-                <td class="px-6 py-3">
-                  <span class="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-surface-100 text-slate-700">{{ tx.category }}</span>
-                </td>
-                <td class="px-6 py-3 text-sm text-right font-medium" :class="tx.amount > 0 ? 'text-emerald-600' : 'text-slate-900'">
-                  {{ tx.amount > 0 ? '+' : '' }}€ {{ Math.abs(tx.amount).toLocaleString('nl-NL') }}
-                </td>
-              </tr>
-            </tbody>
-          </table>
-        </div>
-      </div>
-    </div>
-
-    <!-- AI Insights + Agents -->
-    <div class="grid grid-cols-1 lg:grid-cols-3 gap-6">
-      <!-- AI Insights -->
-      <div class="bg-white rounded-xl border border-surface-200 shadow-sm">
-        <div class="px-6 py-4 border-b border-surface-200">
-          <div class="flex items-center gap-2">
-            <div class="w-6 h-6 bg-primary-100 rounded-lg flex items-center justify-center">
-              <svg class="w-4 h-4 text-primary-600" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 10V3L4 14h7v7l9-11h-7z" /></svg>
-            </div>
-            <h2 class="text-lg font-semibold text-slate-900">AI Inzichten</h2>
+    <!-- Recent Activities -->
+    <div class="bg-white rounded-2xl border border-gray-100">
+      <div class="px-6 py-4 flex items-center justify-between border-b border-gray-50">
+        <h2 class="text-[15px] font-bold text-gray-900">Recente Activiteiten</h2>
+        <div class="flex items-center gap-3">
+          <div class="relative">
+            <svg class="w-4 h-4 text-gray-400 absolute left-3 top-1/2 -translate-y-1/2" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" /></svg>
+            <input type="text" placeholder="Zoek..." class="pl-9 pr-3 py-1.5 bg-gray-50 border border-gray-100 rounded-lg text-[12px] w-44 focus:ring-1 focus:ring-emerald-500 focus:outline-none" />
           </div>
-        </div>
-        <div class="p-6 space-y-4">
-          <div v-for="insight in insights" :key="insight.title" class="flex gap-3">
-            <div class="w-8 h-8 rounded-lg flex items-center justify-center flex-shrink-0 mt-0.5" :class="{ 'bg-red-100 text-red-600': insight.priority === 'high', 'bg-amber-100 text-amber-600': insight.priority === 'medium', 'bg-blue-100 text-blue-600': insight.priority === 'low' }">
-              <span class="text-sm">{{ insight.icon }}</span>
-            </div>
-            <div>
-              <h3 class="text-sm font-semibold text-slate-900">{{ insight.title }}</h3>
-              <p class="text-xs text-slate-500 mt-0.5">{{ insight.description }}</p>
-            </div>
-          </div>
+          <button class="text-[12px] text-gray-500 border border-gray-200 px-3 py-1.5 rounded-lg hover:bg-gray-50 flex items-center gap-1.5">
+            <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 4a1 1 0 011-1h16a1 1 0 011 1v2.586a1 1 0 01-.293.707l-6.414 6.414a1 1 0 00-.293.707V17l-4 4v-6.586a1 1 0 00-.293-.707L3.293 7.293A1 1 0 013 6.586V4z" /></svg>
+            Filter
+          </button>
         </div>
       </div>
-
-      <!-- Active Agents -->
-      <div class="lg:col-span-2 bg-white rounded-xl border border-surface-200 shadow-sm p-6">
-        <div class="flex items-center justify-between mb-4">
-          <h2 class="text-lg font-semibold text-slate-900">AI Agents Status</h2>
-          <NuxtLink to="/ai-accountant" class="text-sm text-primary-600 hover:text-primary-700 font-medium">Open chat →</NuxtLink>
-        </div>
-        <div class="grid grid-cols-1 md:grid-cols-5 gap-3">
-          <div v-for="agent in agentStatus" :key="agent.name" class="bg-surface-50 rounded-lg p-3 text-center">
-            <span class="text-2xl">{{ agent.icon }}</span>
-            <p class="text-xs font-semibold text-slate-900 mt-1">{{ agent.name }}</p>
-            <p class="text-[10px] text-slate-500">{{ agent.lastAction }}</p>
-            <span class="inline-flex items-center gap-1 mt-2 text-[10px]">
-              <span class="w-1.5 h-1.5 rounded-full bg-emerald-500"></span>
-              Actief
-            </span>
-          </div>
-        </div>
-      </div>
+      <table class="w-full">
+        <thead>
+          <tr class="text-left text-[11px] font-medium text-gray-400 uppercase tracking-wider">
+            <th class="px-6 py-3 w-8"></th>
+            <th class="px-6 py-3">Activiteit</th>
+            <th class="px-6 py-3">Referentie</th>
+            <th class="px-6 py-3">Datum</th>
+            <th class="px-6 py-3 text-right">Bedrag</th>
+            <th class="px-6 py-3">Status</th>
+          </tr>
+        </thead>
+        <tbody class="divide-y divide-gray-50">
+          <tr v-for="act in recentActivities" :key="act.id" class="hover:bg-gray-50/50 transition-colors">
+            <td class="px-6 py-3"><div class="w-8 h-8 rounded-xl flex items-center justify-center" :class="act.iconBg"><span class="text-sm">{{ act.icon }}</span></div></td>
+            <td class="px-6 py-3"><p class="text-[13px] font-medium text-gray-900">{{ act.description }}</p></td>
+            <td class="px-6 py-3 text-[12px] text-gray-500 font-mono">{{ act.ref }}</td>
+            <td class="px-6 py-3 text-[12px] text-gray-500">{{ act.date }}</td>
+            <td class="px-6 py-3 text-[13px] text-right font-semibold" :class="act.amount > 0 ? 'text-emerald-600' : 'text-gray-900'">
+              {{ act.amount > 0 ? '+' : '' }}{{ fc(act.amount) }}
+            </td>
+            <td class="px-6 py-3">
+              <span class="inline-flex items-center px-2 py-0.5 rounded-full text-[11px] font-medium" :class="act.statusClass">{{ act.status }}</span>
+            </td>
+          </tr>
+        </tbody>
+      </table>
     </div>
   </div>
 </template>
 
 <script setup lang="ts">
-const currentDate = new Date().toLocaleDateString('nl-NL', { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' })
+const ws = useWorkspaceStore()
 
-const recentTransactions = [
-  { id: 1, date: '28 mrt', description: 'Betaling van Bakkerij de Vries', category: 'Omzet', amount: 2450 },
-  { id: 2, date: '27 mrt', description: 'Google Workspace', category: 'Software', amount: -12.99 },
-  { id: 3, date: '26 mrt', description: 'NS Business Card', category: 'Transport', amount: -156.80 },
-  { id: 4, date: '25 mrt', description: 'Factuur #2024-038 WebDesign BV', category: 'Omzet', amount: 3800 },
-  { id: 5, date: '24 mrt', description: 'Albert Heijn kantoorsnacks', category: 'Kantoor', amount: -34.50 },
-]
-
-const cashflowData = [
+const chartData = [
   { name: 'Jan', income: 11200, expense: 8800 },
   { name: 'Feb', income: 13800, expense: 10700 },
-  { name: 'Mrt', income: 13450, expense: 10030 },
+  { name: 'Mrt', income: 14500, expense: 10030 },
+  { name: 'Apr', income: 8200, expense: 6400 },
 ]
-const maxCashflow = Math.max(...cashflowData.map((m) => Math.max(m.income, m.expense)))
+const maxVal = Math.max(...chartData.flatMap(m => [m.income, m.expense]))
 
-const insights = [
-  { title: 'BTW deadline nadert', description: 'Je BTW aangifte Q1 2026 moet voor 30 april. Geschat: € 2.611.', icon: '⏰', priority: 'high' },
-  { title: 'Onbekende transactie', description: 'Betaling van € 1.250 aan onbekende leverancier.', icon: '⚠️', priority: 'medium' },
-  { title: 'Besparingskans', description: 'Softwarekosten +23% t.o.v. vorig kwartaal.', icon: '💡', priority: 'low' },
+const recentActivities = [
+  { id: 1, icon: '📄', iconBg: 'bg-emerald-50', description: 'Factuur verzonden', ref: 'INV-2026-042', date: '28 mrt 2026', amount: 2964.50, status: 'Betaald', statusClass: 'bg-emerald-50 text-emerald-700' },
+  { id: 2, icon: '💳', iconBg: 'bg-red-50', description: 'Google Workspace', ref: 'EXP-0312', date: '27 mrt 2026', amount: -12.99, status: 'Geboekt', statusClass: 'bg-emerald-50 text-emerald-700' },
+  { id: 3, icon: '🚂', iconBg: 'bg-blue-50', description: 'NS Business Card', ref: 'EXP-0311', date: '26 mrt 2026', amount: -156.80, status: 'Geboekt', statusClass: 'bg-emerald-50 text-emerald-700' },
+  { id: 4, icon: '📄', iconBg: 'bg-emerald-50', description: 'Factuur WebDesign Studio', ref: 'INV-2026-041', date: '25 mrt 2026', amount: 4598, status: 'Verzonden', statusClass: 'bg-amber-50 text-amber-700' },
+  { id: 5, icon: '🛒', iconBg: 'bg-purple-50', description: 'Bol.com bureaustoelen', ref: 'EXP-0310', date: '25 mrt 2026', amount: -349, status: 'Review', statusClass: 'bg-amber-50 text-amber-700' },
+  { id: 6, icon: '📢', iconBg: 'bg-pink-50', description: 'Facebook Ads campagne', ref: 'EXP-0309', date: '22 mrt 2026', amount: -250, status: 'Geboekt', statusClass: 'bg-emerald-50 text-emerald-700' },
+  { id: 7, icon: '⚠️', iconBg: 'bg-red-50', description: 'Factuur TechStart verlopen', ref: 'INV-2026-039', date: '15 mrt 2026', amount: 5600, status: 'Verlopen', statusClass: 'bg-red-50 text-red-700' },
 ]
 
-const agentStatus = [
-  { name: 'Boekhouder', icon: '📒', lastAction: '3 boekingen' },
-  { name: 'BTW', icon: '🧾', lastAction: 'Aangifte klaar' },
-  { name: 'Audit', icon: '🔍', lastAction: '1 fout gevonden' },
-  { name: 'Accountant', icon: '📊', lastAction: 'Rapport klaar' },
-  { name: 'Advisor', icon: '💡', lastAction: '2 tips' },
-]
+function fc(v: number) { return '€ ' + Math.abs(v).toLocaleString('nl-NL', { minimumFractionDigits: 2, maximumFractionDigits: 2 }) }
 </script>
