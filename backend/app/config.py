@@ -3,7 +3,7 @@ from functools import lru_cache
 
 
 class Settings(BaseSettings):
-    DATABASE_URL: str = "postgresql+asyncpg://fiscalflow:fiscalflow@localhost:5432/fiscalflow"
+    DATABASE_URL: str = "sqlite+aiosqlite:///./fiscalflow.db"
     REDIS_URL: str = "redis://localhost:6379/0"
 
     S3_ENDPOINT: str = "http://localhost:9000"

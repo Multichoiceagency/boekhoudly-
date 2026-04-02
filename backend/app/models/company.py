@@ -1,7 +1,7 @@
 import uuid
 from datetime import datetime
 from sqlalchemy import String, DateTime
-from sqlalchemy.dialects.postgresql import UUID, JSONB
+from app.models.compat import GUID as UUID, JSONB
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 from app.database import Base
 
@@ -9,7 +9,7 @@ from app.database import Base
 class Company(Base):
     __tablename__ = "companies"
 
-    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    id: Mapped[uuid.UUID] = mapped_column(UUID, primary_key=True, default=uuid.uuid4)
     name: Mapped[str] = mapped_column(String(255), nullable=False)
     kvk_number: Mapped[str | None] = mapped_column(String(20), nullable=True)
     btw_number: Mapped[str | None] = mapped_column(String(20), nullable=True)
