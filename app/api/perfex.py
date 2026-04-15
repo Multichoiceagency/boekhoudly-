@@ -1,4 +1,8 @@
-"""Perfex CRM proxy + cache endpoints. Admin-only."""
+"""Perfex CRM proxy + cache endpoints. Admin-only.
+
+Credentials are loaded from integration_connections (per-company) first,
+with PERFEX_CRM_URL/PERFEX_CRM_API_KEY env vars as backward-compat fallback.
+"""
 import uuid
 from datetime import datetime
 from fastapi import APIRouter, Depends, HTTPException
@@ -8,12 +12,30 @@ from app.database import get_db
 from app.utils.auth import get_current_user
 from app.models.user import User
 from app.models.crm_cache import CrmRecord, CrmSyncRun
+from app.models.integration_connection import IntegrationConnection
 from app.services.perfex_service import PerfexCRMClient
 from app.config import get_settings
 
 router = APIRouter(prefix="/perfex", tags=["Perfex CRM"])
 settings = get_settings()
 PROVIDER = "perfex"
+
+
+async def _resolve_credentials(user: User, db: AsyncSession) -> tuple[str, str] | None:
+    """Find Perfex credentials: per-company DB first, then env-var fallback."""
+    if user.company_id:
+        result = await db.execute(
+            select(IntegrationConnection).where(
+                IntegrationConnection.company_id == user.company_id,
+                IntegrationConnection.provider == PROVIDER,
+            )
+        )
+        conn = result.scalar_one_or_none()
+        if conn and conn.credentials.get("url") and conn.credentials.get("api_key"):
+            return conn.credentials["url"], conn.credentials["api_key"]
+    if settings.PERFEX_CRM_URL and settings.PERFEX_CRM_API_KEY:
+        return settings.PERFEX_CRM_URL, settings.PERFEX_CRM_API_KEY
+    return None
 
 
 async def require_admin(current_user: User = Depends(get_current_user)) -> User:
@@ -23,23 +45,38 @@ async def require_admin(current_user: User = Depends(get_current_user)) -> User:
 
 
 def _client(url: str | None = None, api_key: str | None = None) -> PerfexCRMClient:
-    """Build a Perfex client. Falls back to env vars if URL/key not given."""
+    """Build a Perfex client from explicit args (used by POST /test).
+    For normal calls use _client_for_user instead."""
     try:
         return PerfexCRMClient(base_url=url, api_key=api_key)
     except ValueError:
-        raise HTTPException(status_code=503, detail="Perfex CRM is niet geconfigureerd (PERFEX_CRM_URL + PERFEX_CRM_API_KEY ontbreken)")
+        raise HTTPException(status_code=503, detail="Perfex CRM is niet geconfigureerd")
+
+
+async def _client_for_user(user: User, db: AsyncSession) -> PerfexCRMClient:
+    creds = await _resolve_credentials(user, db)
+    if not creds:
+        raise HTTPException(
+            status_code=503,
+            detail="Geen Perfex koppeling gevonden voor dit bedrijf. Voeg er een toe via Instellingen → Integraties.",
+        )
+    url, api_key = creds
+    return PerfexCRMClient(base_url=url, api_key=api_key)
 
 
 @router.get("/test")
-async def test_connection_get(admin: User = Depends(require_admin)):
-    """Test the configured Perfex CRM connection."""
-    client = _client()
+async def test_connection_get(
+    admin: User = Depends(require_admin),
+    db: AsyncSession = Depends(get_db),
+):
+    """Test the Perfex connection for the current user's company."""
+    client = await _client_for_user(admin, db)
     return await client.test_connection()
 
 
 @router.post("/test")
 async def test_connection_post(data: dict, current_user: User = Depends(get_current_user)):
-    """Test a custom Perfex CRM URL + API key (used in settings UI)."""
+    """Test a custom Perfex CRM URL + API key (used in connect modal)."""
     url = data.get("url", "").strip()
     api_key = data.get("api_key", "").strip()
     if not url or not api_key:
@@ -52,10 +89,13 @@ async def test_connection_post(data: dict, current_user: User = Depends(get_curr
 
 
 @router.get("/summary")
-async def summary(admin: User = Depends(require_admin)):
+async def summary(
+    admin: User = Depends(require_admin),
+    db: AsyncSession = Depends(get_db),
+):
     """Compact dashboard summary — counts of customers, invoices, payments,
     plus revenue totals from the invoices feed."""
-    client = _client()
+    client = await _client_for_user(admin, db)
     customers = await client.get_customers()
     invoices = await client.get_invoices()
     payments = await client.get_payments()
@@ -89,67 +129,77 @@ async def summary(admin: User = Depends(require_admin)):
 
 
 @router.get("/customers")
-async def list_customers(admin: User = Depends(require_admin)):
-    return await _client().get_customers()
+async def list_customers(admin: User = Depends(require_admin), db: AsyncSession = Depends(get_db)):
+    client = await _client_for_user(admin, db)
+    return await client.get_customers()
 
 
 @router.get("/customers/{customer_id}")
-async def get_customer(customer_id: str, admin: User = Depends(require_admin)):
-    client = _client()
+async def get_customer(customer_id: str, admin: User = Depends(require_admin), db: AsyncSession = Depends(get_db)):
+    client = await _client_for_user(admin, db)
     customer = await client.get_customer(customer_id)
     contacts = await client.get_customer_contacts(customer_id)
     return {"customer": customer, "contacts": contacts}
 
 
 @router.get("/invoices")
-async def list_invoices(admin: User = Depends(require_admin)):
-    return await _client().get_invoices()
+async def list_invoices(admin: User = Depends(require_admin), db: AsyncSession = Depends(get_db)):
+    client = await _client_for_user(admin, db)
+    return await client.get_invoices()
 
 
 @router.get("/invoices/{invoice_id}")
-async def get_invoice(invoice_id: str, admin: User = Depends(require_admin)):
-    return await _client().get_invoice(invoice_id)
+async def get_invoice(invoice_id: str, admin: User = Depends(require_admin), db: AsyncSession = Depends(get_db)):
+    client = await _client_for_user(admin, db)
+    return await client.get_invoice(invoice_id)
 
 
 @router.get("/payments")
-async def list_payments(admin: User = Depends(require_admin)):
-    return await _client().get_payments()
+async def list_payments(admin: User = Depends(require_admin), db: AsyncSession = Depends(get_db)):
+    client = await _client_for_user(admin, db)
+    return await client.get_payments()
 
 
 @router.get("/estimates")
-async def list_estimates(admin: User = Depends(require_admin)):
-    return await _client().get_estimates()
+async def list_estimates(admin: User = Depends(require_admin), db: AsyncSession = Depends(get_db)):
+    client = await _client_for_user(admin, db)
+    return await client.get_estimates()
 
 
 @router.get("/proposals")
-async def list_proposals(admin: User = Depends(require_admin)):
-    return await _client().get_proposals()
+async def list_proposals(admin: User = Depends(require_admin), db: AsyncSession = Depends(get_db)):
+    client = await _client_for_user(admin, db)
+    return await client.get_proposals()
 
 
 @router.get("/credit-notes")
-async def list_credit_notes(admin: User = Depends(require_admin)):
-    return await _client().get_credit_notes()
+async def list_credit_notes(admin: User = Depends(require_admin), db: AsyncSession = Depends(get_db)):
+    client = await _client_for_user(admin, db)
+    return await client.get_credit_notes()
 
 
 @router.get("/leads")
-async def list_leads(admin: User = Depends(require_admin)):
-    return await _client().get_leads()
+async def list_leads(admin: User = Depends(require_admin), db: AsyncSession = Depends(get_db)):
+    client = await _client_for_user(admin, db)
+    return await client.get_leads()
 
 
 @router.get("/projects")
-async def list_projects(admin: User = Depends(require_admin)):
-    return await _client().get_projects()
+async def list_projects(admin: User = Depends(require_admin), db: AsyncSession = Depends(get_db)):
+    client = await _client_for_user(admin, db)
+    return await client.get_projects()
 
 
 @router.get("/items")
-async def list_items(admin: User = Depends(require_admin)):
-    return await _client().get_items()
+async def list_items(admin: User = Depends(require_admin), db: AsyncSession = Depends(get_db)):
+    client = await _client_for_user(admin, db)
+    return await client.get_items()
 
 
 @router.get("/sync")
-async def sync_all(admin: User = Depends(require_admin)):
+async def sync_all(admin: User = Depends(require_admin), db: AsyncSession = Depends(get_db)):
     """Fetch all key resources at once (no DB write — used by sync-to-db)."""
-    client = _client()
+    client = await _client_for_user(admin, db)
     result = await client.sync_all()
     return {"counts": {k: len(v) for k, v in result.items()}, "data": result}
 
@@ -174,8 +224,14 @@ async def sync_to_db(
     await db.flush()
 
     try:
-        client = _client()
+        client = await _client_for_user(admin, db)
         data = await client.sync_all()
+    except HTTPException:
+        run.status = "error"
+        run.error = "Geen Perfex koppeling geconfigureerd"
+        run.finished_at = datetime.utcnow()
+        await db.flush()
+        raise
     except Exception as e:
         run.status = "error"
         run.error = str(e)[:1900]
