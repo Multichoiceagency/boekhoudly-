@@ -37,6 +37,8 @@ def _plan_to_dict(p: SubscriptionPlan) -> dict:
         "max_users": p.max_users,
         "features": p.features or {},
         "is_active": p.is_active,
+        "stripe_product_id": p.stripe_product_id,
+        "stripe_price_id": p.stripe_price_id,
     }
 
 
