@@ -3,7 +3,7 @@ import random
 import logging
 from datetime import datetime, timedelta
 import httpx
-from fastapi import APIRouter, Depends, HTTPException, status, BackgroundTasks
+from fastapi import APIRouter, Depends, HTTPException, Request, status, BackgroundTasks
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
 from app.database import get_db
@@ -68,15 +68,22 @@ async def login(data: UserLogin, db: AsyncSession = Depends(get_db)):
 
 
 @router.post("/send-code")
-async def send_code(data: dict, background_tasks: BackgroundTasks, db: AsyncSession = Depends(get_db)):
+async def send_code(request: Request, data: dict, background_tasks: BackgroundTasks, db: AsyncSession = Depends(get_db)):
     """Stuur een verificatiecode naar het opgegeven e-mailadres."""
     email = data.get("email", "").strip().lower()
     if not email:
         raise HTTPException(status_code=400, detail="E-mailadres is verplicht")
 
-    # Check rate limiting (max 1 per 60 seconds)
+    # If the Nuxt server is calling us with a valid shared secret, we let it
+    # handle both rate limiting and email delivery — just generate and return
+    # the code. This keeps the SMTP dependency on the Nuxt side (Vercel/Coolify).
+    nuxt_secret = getattr(settings, "NUXT_INTERNAL_SECRET", "")
+    incoming_secret = request.headers.get("X-Nuxt-Secret", "")
+    nuxt_authenticated = bool(nuxt_secret) and incoming_secret == nuxt_secret
+
+    # Check rate limiting (max 1 per 60 seconds) — only when not Nuxt-authenticated
     existing = _verification_codes.get(email)
-    if existing and datetime.utcnow() - existing["created_at"] < timedelta(seconds=60):
+    if not nuxt_authenticated and existing and datetime.utcnow() - existing["created_at"] < timedelta(seconds=60):
         raise HTTPException(status_code=429, detail="Wacht even voordat je een nieuwe code aanvraagt")
 
     # Generate 6-digit code
@@ -96,10 +103,14 @@ async def send_code(data: dict, background_tasks: BackgroundTasks, db: AsyncSess
         "is_new": is_new,
     }
 
-    # Send email in background
-    background_tasks.add_task(send_verification_email, email, code, not is_new)
+    logger.info(f"Verification code generated for {email} (new_user={is_new}, via_nuxt={nuxt_authenticated})")
 
-    logger.info(f"Verification code sent to {email} (new_user={is_new})")
+    if nuxt_authenticated:
+        # Nuxt will email the code itself — return it so it can
+        return {"message": "Verificatiecode verzonden", "is_new_user": is_new, "code": code}
+
+    # Fallback: send email from backend (requires SMTP to be configured)
+    background_tasks.add_task(send_verification_email, email, code, not is_new)
     return {"message": "Verificatiecode verzonden", "is_new_user": is_new}
 
 
