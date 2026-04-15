@@ -49,6 +49,12 @@ class Settings(BaseSettings):
     # SnelStart webhook signing secret (HMAC-SHA256)
     SNELSTART_WEBHOOK_SECRET: str = ""
 
+    # KvK (Kamer van Koophandel) API key for company lookup
+    KVK_API_KEY: str = ""
+
+    # Self-registration toggle — when False, verify-code rejects unknown emails
+    ALLOW_SELF_REGISTRATION: bool = False
+
     # Google Drive
     GOOGLE_DRIVE_CLIENT_ID: str = ""
     GOOGLE_DRIVE_CLIENT_SECRET: str = ""

@@ -27,7 +27,18 @@ _verification_codes: dict[str, dict] = {}
 
 @router.post("/register", response_model=Token, status_code=201)
 async def register(data: UserCreate, db: AsyncSession = Depends(get_db)):
-    """Registreer een nieuw account met e-mail en wachtwoord."""
+    """Registreer een nieuw account met e-mail en wachtwoord.
+
+    Self-registration is standaard uitgeschakeld — nieuwe gebruikers moeten
+    door een admin worden aangemaakt. Zet ALLOW_SELF_REGISTRATION=True in
+    de omgeving om weer open te zetten.
+    """
+    if not getattr(settings, "ALLOW_SELF_REGISTRATION", False):
+        raise HTTPException(
+            status_code=403,
+            detail="Zelf-registratie is uitgeschakeld. Neem contact op met info@fiscaalflow.nl om een account aan te vragen.",
+        )
+
     existing = await db.execute(select(User).where(User.email == data.email))
     if existing.scalar_one_or_none():
         raise HTTPException(status_code=400, detail="E-mailadres is al in gebruik")
@@ -148,13 +159,18 @@ async def verify_code(data: dict, background_tasks: BackgroundTasks, db: AsyncSe
     # Code is valid - clean up
     del _verification_codes[email]
 
-    # Find or create user
+    # Find user
     result = await db.execute(select(User).where(User.email == email))
     user = result.scalar_one_or_none()
     is_new = False
 
     if not user:
-        # New user registration
+        if not getattr(settings, "ALLOW_SELF_REGISTRATION", False):
+            raise HTTPException(
+                status_code=404,
+                detail="Dit e-mailadres heeft geen account. Neem contact op met info@fiscaalflow.nl om een account aan te vragen.",
+            )
+        # Self-registration allowed — create a new user
         user = User(
             id=uuid.uuid4(),
             email=email,

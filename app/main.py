@@ -34,7 +34,7 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-from app.api import auth, upload, transactions, vat, ai, bank, cloud_storage, perfex, admin, workspace, webhooks
+from app.api import auth, upload, transactions, vat, ai, bank, cloud_storage, perfex, admin, workspace, webhooks, kvk
 
 app.include_router(auth.router, prefix="/api")
 app.include_router(upload.router, prefix="/api")
@@ -47,6 +47,7 @@ app.include_router(perfex.router, prefix="/api")
 app.include_router(admin.router, prefix="/api")
 app.include_router(workspace.router, prefix="/api")
 app.include_router(webhooks.router, prefix="/api")
+app.include_router(kvk.router, prefix="/api")
 
 
 @app.get("/health")
