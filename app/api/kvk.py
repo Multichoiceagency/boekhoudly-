@@ -20,21 +20,46 @@ def _headers() -> dict:
     return {"apikey": key, "Accept": "application/json"}
 
 
-def _clean_item(item: dict) -> dict:
-    """Normalize a KvK search result (Dutch field names) to a compact frontend shape."""
-    adressen = item.get("adressen", []) or []
-    main = adressen[0] if adressen else {}
+def _clean_search_item(item: dict) -> dict:
+    """Normalize a /zoeken result. Search only has straatnaam+plaats, no postcode."""
+    adres = (item.get("adres") or {}).get("binnenlandsAdres") or (item.get("adres") or {}).get("buitenlandsAdres") or {}
     return {
         "kvk_number": item.get("kvkNummer"),
         "branch_number": item.get("vestigingsnummer"),
-        "rsin": item.get("rsin"),
-        "name": item.get("handelsnaam") or item.get("naam"),
+        "rsin": None,
+        "name": item.get("naam"),
         "type": item.get("type"),
-        "street": main.get("straatnaam"),
-        "house_number": str(main.get("huisnummer", "") or "") + (main.get("huisletter") or "") + (main.get("huisnummerToevoeging") or ""),
-        "postal_code": main.get("postcode"),
-        "city": main.get("plaats"),
-        "country": main.get("land") or "Nederland",
+        "street": adres.get("straatnaam"),
+        "house_number": "",
+        "postal_code": None,
+        "city": adres.get("plaats"),
+        "country": "Nederland",
+    }
+
+
+def _extract_address(adressen: list) -> dict:
+    """Pick the best address from a list of KvK adressen — prefer bezoekadres."""
+    if not adressen:
+        return {}
+    bezoek = next((a for a in adressen if a.get("type") == "bezoekadres"), None)
+    return bezoek or adressen[0]
+
+
+def _clean_profile(d: dict) -> dict:
+    """Normalize a /basisprofielen response with full address info."""
+    hoofd = (d.get("_embedded") or {}).get("hoofdvestiging") or {}
+    address = _extract_address(hoofd.get("adressen") or [])
+    return {
+        "kvk_number": d.get("kvkNummer"),
+        "branch_number": hoofd.get("vestigingsnummer"),
+        "rsin": d.get("rsin"),
+        "name": d.get("naam") or d.get("statutaireNaam") or hoofd.get("eersteHandelsnaam"),
+        "type": "Hoofdvestiging" if hoofd.get("indHoofdvestiging") == "Ja" else None,
+        "street": address.get("straatnaam"),
+        "house_number": str(address.get("huisnummer") or "") + (address.get("huisletter") or "") + (address.get("huisnummerToevoeging") or ""),
+        "postal_code": address.get("postcode"),
+        "city": address.get("plaats"),
+        "country": address.get("land") or "Nederland",
     }
 
 
@@ -73,7 +98,7 @@ async def search(
 
     data = r.json()
     items = data.get("resultaten", []) or []
-    results = [_clean_item(i) for i in items[:15]]
+    results = [_clean_search_item(i) for i in items[:15]]
     return {"results": results, "total": data.get("totaal", len(results))}
 
 
@@ -101,21 +126,4 @@ async def by_kvk_number(
     if r.status_code >= 400:
         raise HTTPException(status_code=502, detail=f"KvK API fout ({r.status_code})")
 
-    # basisprofielen has a different shape — extract main vestiging
-    d = r.json()
-    handelsnaam = d.get("handelsnaam") or (d.get("_embedded", {}).get("hoofdvestiging", {}) or {}).get("naam")
-    vestiging = (d.get("_embedded", {}).get("hoofdvestiging", {}) or {})
-    adressen = vestiging.get("adressen", []) or []
-    main = adressen[0] if adressen else {}
-    return {
-        "kvk_number": d.get("kvkNummer"),
-        "branch_number": vestiging.get("vestigingsnummer"),
-        "rsin": d.get("rsin"),
-        "name": handelsnaam,
-        "type": vestiging.get("indHoofdvestiging") and "Hoofdvestiging" or None,
-        "street": main.get("straatnaam"),
-        "house_number": str(main.get("huisnummer", "") or "") + (main.get("huisletter") or "") + (main.get("huisnummerToevoeging") or ""),
-        "postal_code": main.get("postcode"),
-        "city": main.get("plaats"),
-        "country": main.get("land") or "Nederland",
-    }
+    return _clean_profile(r.json())
