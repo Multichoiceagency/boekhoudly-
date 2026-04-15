@@ -15,10 +15,13 @@ from app.models.webhook_event import WebhookEvent
 from app.models.subscription_plan import SubscriptionPlan
 from app.models.company_subscription import CompanySubscription
 from app.models.ai_usage import AiUsage
+from app.models.integration_connection import IntegrationConnection
+from app.models.crm_cache import CrmRecord, CrmSyncRun
 
 __all__ = [
     "User", "Company", "Transaction", "Document", "LedgerEntry",
     "VATReport", "BankConnection", "CloudConnection",
     "Invoice", "Expense", "Debtor", "Creditor", "BankTransaction",
     "WebhookEvent", "SubscriptionPlan", "CompanySubscription", "AiUsage",
+    "IntegrationConnection", "CrmRecord", "CrmSyncRun",
 ]

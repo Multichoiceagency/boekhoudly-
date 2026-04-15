@@ -1,13 +1,19 @@
-"""Perfex CRM proxy endpoints. Auth is shared across all clients via env vars
-(PERFEX_CRM_URL + PERFEX_CRM_API_KEY) — only admins can hit these endpoints."""
+"""Perfex CRM proxy + cache endpoints. Admin-only."""
+import uuid
+from datetime import datetime
 from fastapi import APIRouter, Depends, HTTPException
+from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy import select, delete
+from app.database import get_db
 from app.utils.auth import get_current_user
 from app.models.user import User
+from app.models.crm_cache import CrmRecord, CrmSyncRun
 from app.services.perfex_service import PerfexCRMClient
 from app.config import get_settings
 
 router = APIRouter(prefix="/perfex", tags=["Perfex CRM"])
 settings = get_settings()
+PROVIDER = "perfex"
 
 
 async def require_admin(current_user: User = Depends(get_current_user)) -> User:
@@ -142,10 +148,117 @@ async def list_items(admin: User = Depends(require_admin)):
 
 @router.get("/sync")
 async def sync_all(admin: User = Depends(require_admin)):
-    """Fetch all key resources at once for an import overview."""
+    """Fetch all key resources at once (no DB write — used by sync-to-db)."""
     client = _client()
     result = await client.sync_all()
-    return {
-        "counts": {k: len(v) for k, v in result.items()},
-        "data": result,
+    return {"counts": {k: len(v) for k, v in result.items()}, "data": result}
+
+
+@router.post("/sync-to-db")
+async def sync_to_db(
+    admin: User = Depends(require_admin),
+    db: AsyncSession = Depends(get_db),
+):
+    """Pull all resources from Perfex and persist them in crm_records.
+
+    Idempotent: deletes existing perfex rows for each resource then inserts
+    the fresh set. Records the run in crm_sync_runs.
+    """
+    run = CrmSyncRun(
+        id=uuid.uuid4(),
+        company_id=admin.company_id,
+        provider=PROVIDER,
+        status="running",
+    )
+    db.add(run)
+    await db.flush()
+
+    try:
+        client = _client()
+        data = await client.sync_all()
+    except Exception as e:
+        run.status = "error"
+        run.error = str(e)[:1900]
+        run.finished_at = datetime.utcnow()
+        await db.flush()
+        raise HTTPException(status_code=502, detail=f"Perfex sync mislukt: {str(e)[:200]}")
+
+    counts: dict = {}
+    id_field = {
+        "customers": "userid",
+        "invoices": "id",
+        "payments": "id",
+        "estimates": "id",
+        "proposals": "id",
+        "credit_notes": "id",
+        "subscriptions": "id",
+        "leads": "id",
+        "projects": "id",
+        "items": "id",
+        "tickets": "ticketid",
+        "contracts": "id",
     }
+
+    for resource, items in data.items():
+        if not isinstance(items, list):
+            continue
+        await db.execute(delete(CrmRecord).where(CrmRecord.provider == PROVIDER, CrmRecord.resource == resource))
+        for item in items:
+            if not isinstance(item, dict):
+                continue
+            ext = str(item.get(id_field.get(resource, "id"), ""))
+            if not ext:
+                continue
+            db.add(CrmRecord(
+                id=uuid.uuid4(),
+                company_id=admin.company_id,
+                provider=PROVIDER,
+                resource=resource,
+                external_id=ext,
+                payload=item,
+                synced_at=datetime.utcnow(),
+            ))
+        counts[resource] = len(items)
+
+    run.status = "success"
+    run.finished_at = datetime.utcnow()
+    run.counts = counts
+    await db.flush()
+
+    return {"status": "success", "counts": counts, "run_id": str(run.id), "synced_at": run.finished_at.isoformat()}
+
+
+@router.get("/sync-status")
+async def sync_status(
+    admin: User = Depends(require_admin),
+    db: AsyncSession = Depends(get_db),
+):
+    """Return the most recent sync run for Perfex."""
+    result = await db.execute(
+        select(CrmSyncRun).where(CrmSyncRun.provider == PROVIDER).order_by(CrmSyncRun.started_at.desc()).limit(1)
+    )
+    run = result.scalar_one_or_none()
+    if not run:
+        return {"last_synced": None, "status": None, "counts": {}}
+    return {
+        "last_synced": run.finished_at.isoformat() if run.finished_at else None,
+        "status": run.status,
+        "counts": run.counts or {},
+        "error": run.error,
+    }
+
+
+@router.get("/cached/{resource}")
+async def get_cached(
+    resource: str,
+    admin: User = Depends(require_admin),
+    db: AsyncSession = Depends(get_db),
+):
+    """Read cached records for a resource (customers/invoices/payments/...)."""
+    result = await db.execute(
+        select(CrmRecord)
+        .where(CrmRecord.provider == PROVIDER, CrmRecord.resource == resource)
+        .order_by(CrmRecord.synced_at.desc())
+    )
+    records = result.scalars().all()
+    return [r.payload for r in records]
