@@ -10,6 +10,7 @@ router = APIRouter(prefix="/kvk", tags=["KvK"])
 settings = get_settings()
 
 KVK_BASE_URL = "https://api.kvk.nl/api/v2"
+KVK_PROFILE_URL = "https://api.kvk.nl/api/v1"
 
 
 def _headers() -> dict:
@@ -20,20 +21,20 @@ def _headers() -> dict:
 
 
 def _clean_item(item: dict) -> dict:
-    """Normalize a KvK search result item to a compact frontend shape."""
-    addresses = item.get("addresses", []) or []
-    main = next((a for a in addresses if a.get("type") == "bezoekadres"), None) or (addresses[0] if addresses else {})
+    """Normalize a KvK search result (Dutch field names) to a compact frontend shape."""
+    adressen = item.get("adressen", []) or []
+    main = adressen[0] if adressen else {}
     return {
-        "kvk_number": item.get("kvkNumber"),
-        "branch_number": item.get("branchNumber"),
+        "kvk_number": item.get("kvkNummer"),
+        "branch_number": item.get("vestigingsnummer"),
         "rsin": item.get("rsin"),
-        "name": item.get("name") or item.get("tradeNames", {}).get("currentTradeNames", [None])[0],
+        "name": item.get("handelsnaam") or item.get("naam"),
         "type": item.get("type"),
-        "street": main.get("street"),
-        "house_number": main.get("houseNumber"),
-        "postal_code": main.get("postalCode"),
-        "city": main.get("city"),
-        "country": main.get("country"),
+        "street": main.get("straatnaam"),
+        "house_number": str(main.get("huisnummer", "") or "") + (main.get("huisletter") or "") + (main.get("huisnummerToevoeging") or ""),
+        "postal_code": main.get("postcode"),
+        "city": main.get("plaats"),
+        "country": main.get("land") or "Nederland",
     }
 
 
@@ -57,7 +58,7 @@ async def search(
 
     try:
         async with httpx.AsyncClient(timeout=10.0) as client:
-            r = await client.get(f"{KVK_BASE_URL}/search", params=params, headers=_headers())
+            r = await client.get(f"{KVK_BASE_URL}/zoeken", params=params, headers=_headers())
     except httpx.HTTPError as e:
         logger.warning(f"KvK API request failed: {e}")
         raise HTTPException(status_code=502, detail="KvK API bereikbaarheid verstoord")
@@ -81,15 +82,14 @@ async def by_kvk_number(
     kvk_number: str,
     current_user: User = Depends(get_current_user),
 ):
-    """Haal basisprofiel op voor een specifiek KvK-nummer."""
+    """Haal basisprofiel op voor een specifiek KvK-nummer via /api/v1/basisprofielen."""
     if not kvk_number.isdigit() or len(kvk_number) < 7:
         raise HTTPException(status_code=400, detail="Ongeldig KvK-nummer")
 
     try:
         async with httpx.AsyncClient(timeout=10.0) as client:
             r = await client.get(
-                f"{KVK_BASE_URL}/search",
-                params={"kvkNummer": kvk_number},
+                f"{KVK_PROFILE_URL}/basisprofielen/{kvk_number}",
                 headers=_headers(),
             )
     except httpx.HTTPError as e:
@@ -101,7 +101,21 @@ async def by_kvk_number(
     if r.status_code >= 400:
         raise HTTPException(status_code=502, detail=f"KvK API fout ({r.status_code})")
 
-    items = r.json().get("resultaten", []) or []
-    if not items:
-        raise HTTPException(status_code=404, detail="Onderneming niet gevonden")
-    return _clean_item(items[0])
+    # basisprofielen has a different shape — extract main vestiging
+    d = r.json()
+    handelsnaam = d.get("handelsnaam") or (d.get("_embedded", {}).get("hoofdvestiging", {}) or {}).get("naam")
+    vestiging = (d.get("_embedded", {}).get("hoofdvestiging", {}) or {})
+    adressen = vestiging.get("adressen", []) or []
+    main = adressen[0] if adressen else {}
+    return {
+        "kvk_number": d.get("kvkNummer"),
+        "branch_number": vestiging.get("vestigingsnummer"),
+        "rsin": d.get("rsin"),
+        "name": handelsnaam,
+        "type": vestiging.get("indHoofdvestiging") and "Hoofdvestiging" or None,
+        "street": main.get("straatnaam"),
+        "house_number": str(main.get("huisnummer", "") or "") + (main.get("huisletter") or "") + (main.get("huisnummerToevoeging") or ""),
+        "postal_code": main.get("postcode"),
+        "city": main.get("plaats"),
+        "country": main.get("land") or "Nederland",
+    }
