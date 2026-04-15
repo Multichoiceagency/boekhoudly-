@@ -1,7 +1,7 @@
 import uuid
 import logging
 from datetime import datetime, date
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Request
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
 from app.database import get_db
@@ -11,9 +11,18 @@ from app.models.subscription_plan import SubscriptionPlan
 from app.models.company_subscription import CompanySubscription
 from app.models.ai_usage import AiUsage
 from app.utils.auth import get_current_user
+from app.config import get_settings
+from app.services import stripe_service
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/billing", tags=["Billing"])
+settings = get_settings()
+
+
+async def require_admin(current_user: User = Depends(get_current_user)) -> User:
+    if current_user.role != "admin":
+        raise HTTPException(status_code=403, detail="Alleen admins hebben toegang")
+    return current_user
 
 
 def _plan_to_dict(p: SubscriptionPlan) -> dict:
@@ -267,3 +276,200 @@ async def seed_plans(
 
     await db.flush()
     return {"created": created, "message": f"{len(created)} plan(s) created"}
+
+
+# ============================================================
+#  STRIPE CHECKOUT + CUSTOMER PORTAL
+# ============================================================
+@router.post("/checkout-session")
+async def create_checkout(
+    data: dict,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Maak een Stripe Checkout Session aan voor een bedrijf + plan.
+
+    Body:
+      - company_id: UUID of the company to subscribe
+      - plan_slug: 'starter' | 'pro' | 'enterprise'
+    """
+    if not stripe_service.is_configured():
+        raise HTTPException(status_code=503, detail="Stripe is niet geconfigureerd")
+
+    company_id = data.get("company_id")
+    plan_slug = data.get("plan_slug")
+    if not company_id or not plan_slug:
+        raise HTTPException(status_code=400, detail="company_id en plan_slug zijn verplicht")
+
+    company_result = await db.execute(select(Company).where(Company.id == company_id))
+    company = company_result.scalar_one_or_none()
+    if not company:
+        raise HTTPException(status_code=404, detail="Bedrijf niet gevonden")
+
+    plan_result = await db.execute(select(SubscriptionPlan).where(SubscriptionPlan.slug == plan_slug))
+    plan = plan_result.scalar_one_or_none()
+    if not plan or not plan.stripe_price_id:
+        raise HTTPException(status_code=400, detail=f"Plan '{plan_slug}' heeft geen Stripe price ID")
+
+    # Permission: admin or accountant of this company
+    sub_result = await db.execute(select(CompanySubscription).where(CompanySubscription.company_id == company.id))
+    sub = sub_result.scalar_one_or_none()
+    if current_user.role != "admin" and (not sub or sub.accountant_id != current_user.id):
+        raise HTTPException(status_code=403, detail="Geen toegang tot dit bedrijf")
+
+    try:
+        customer = stripe_service.get_or_create_customer(
+            email=current_user.email,
+            name=company.name,
+            company_id=str(company.id),
+        )
+
+        if sub and not sub.stripe_customer_id:
+            sub.stripe_customer_id = customer.id
+            await db.flush()
+
+        session = stripe_service.create_checkout_session(
+            customer_id=customer.id,
+            price_id=plan.stripe_price_id,
+            success_url=settings.STRIPE_SUCCESS_URL,
+            cancel_url=settings.STRIPE_CANCEL_URL,
+            company_id=str(company.id),
+            plan_slug=plan_slug,
+        )
+        return {"url": session.url, "session_id": session.id}
+    except Exception as e:
+        logger.exception("Stripe checkout failed")
+        raise HTTPException(status_code=502, detail=f"Stripe fout: {str(e)[:200]}")
+
+
+@router.post("/portal-session")
+async def create_portal(
+    data: dict,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Stripe Customer Portal voor abonnement-/betaalbeheer."""
+    if not stripe_service.is_configured():
+        raise HTTPException(status_code=503, detail="Stripe is niet geconfigureerd")
+
+    company_id = data.get("company_id")
+    if not company_id:
+        raise HTTPException(status_code=400, detail="company_id is verplicht")
+
+    sub_result = await db.execute(select(CompanySubscription).where(CompanySubscription.company_id == company_id))
+    sub = sub_result.scalar_one_or_none()
+    if not sub or not sub.stripe_customer_id:
+        raise HTTPException(status_code=404, detail="Geen Stripe klant voor dit bedrijf")
+
+    if current_user.role != "admin" and sub.accountant_id != current_user.id:
+        raise HTTPException(status_code=403, detail="Geen toegang")
+
+    try:
+        portal = stripe_service.create_portal_session(
+            customer_id=sub.stripe_customer_id,
+            return_url=settings.STRIPE_SUCCESS_URL,
+        )
+        return {"url": portal.url}
+    except Exception as e:
+        logger.exception("Stripe portal failed")
+        raise HTTPException(status_code=502, detail=f"Stripe fout: {str(e)[:200]}")
+
+
+# ============================================================
+#  ADMIN OVERVIEW — Stripe payments / invoices / subscriptions
+# ============================================================
+@router.get("/payments")
+async def list_payments(admin: User = Depends(require_admin)):
+    """Lijst van alle Stripe payment intents (admin only)."""
+    if not stripe_service.is_configured():
+        return {"payments": [], "message": "Stripe niet geconfigureerd"}
+    return {"payments": stripe_service.list_payments(limit=100)}
+
+
+@router.get("/invoices")
+async def list_stripe_invoices(admin: User = Depends(require_admin)):
+    """Lijst van alle Stripe facturen (admin only)."""
+    if not stripe_service.is_configured():
+        return {"invoices": [], "message": "Stripe niet geconfigureerd"}
+    return {"invoices": stripe_service.list_invoices(limit=100)}
+
+
+@router.get("/subscriptions")
+async def list_stripe_subscriptions(admin: User = Depends(require_admin)):
+    """Lijst van alle Stripe subscriptions (admin only)."""
+    if not stripe_service.is_configured():
+        return {"subscriptions": [], "message": "Stripe niet geconfigureerd"}
+    return {"subscriptions": stripe_service.list_subscriptions(limit=100)}
+
+
+# ============================================================
+#  STRIPE WEBHOOK
+# ============================================================
+@router.post("/webhooks/stripe")
+async def stripe_webhook(request: Request, db: AsyncSession = Depends(get_db)):
+    """Verwerk Stripe events: subscription created/updated/deleted, invoice paid/failed."""
+    payload = await request.body()
+    sig_header = request.headers.get("stripe-signature", "")
+
+    try:
+        event = stripe_service.verify_webhook(payload, sig_header)
+    except Exception as e:
+        logger.warning(f"Stripe webhook signature verification failed: {e}")
+        raise HTTPException(status_code=400, detail="Invalid signature")
+
+    event_type = event["type"]
+    obj = event["data"]["object"]
+    logger.info(f"Stripe webhook: {event_type}")
+
+    if event_type in ("customer.subscription.created", "customer.subscription.updated"):
+        company_id = obj.get("metadata", {}).get("company_id")
+        if company_id:
+            sub_result = await db.execute(
+                select(CompanySubscription).where(CompanySubscription.company_id == company_id)
+            )
+            sub = sub_result.scalar_one_or_none()
+            if sub:
+                sub.stripe_subscription_id = obj["id"]
+                sub.stripe_customer_id = obj["customer"]
+                sub.status = obj["status"]
+                sub.updated_at = datetime.utcnow()
+                await db.flush()
+
+    elif event_type == "customer.subscription.deleted":
+        sub_result = await db.execute(
+            select(CompanySubscription).where(CompanySubscription.stripe_subscription_id == obj["id"])
+        )
+        sub = sub_result.scalar_one_or_none()
+        if sub:
+            sub.status = "cancelled"
+            sub.updated_at = datetime.utcnow()
+            await db.flush()
+
+    elif event_type == "invoice.payment_succeeded":
+        sub_id = obj.get("subscription")
+        if sub_id:
+            sub_result = await db.execute(
+                select(CompanySubscription).where(CompanySubscription.stripe_subscription_id == sub_id)
+            )
+            sub = sub_result.scalar_one_or_none()
+            if sub:
+                sub.last_payment_at = datetime.utcnow()
+                sub.status = "active"
+                # Reset AI counters at start of new period
+                sub.ai_credits_used = 0
+                sub.ai_cost_eur_cents = 0
+                sub.period_start = date.today()
+                await db.flush()
+
+    elif event_type == "invoice.payment_failed":
+        sub_id = obj.get("subscription")
+        if sub_id:
+            sub_result = await db.execute(
+                select(CompanySubscription).where(CompanySubscription.stripe_subscription_id == sub_id)
+            )
+            sub = sub_result.scalar_one_or_none()
+            if sub:
+                sub.status = "past_due"
+                await db.flush()
+
+    return {"received": True}

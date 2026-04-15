@@ -10,16 +10,40 @@ logger = logging.getLogger(__name__)
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     # Startup
-    from app.database import init_db, async_session
+    from app.database import init_db, async_session, engine
+    from sqlalchemy import text
     import app.models  # noqa: ensure all models are imported
     await init_db()
     logger.info("FiscalFlow AI API gestart - database tables ready")
 
-    # Seed default subscription plans
+    # Lightweight idempotent migrations — add columns on existing tables
+    migrations = [
+        "ALTER TABLE subscription_plans ADD COLUMN IF NOT EXISTS stripe_product_id VARCHAR(255)",
+        "ALTER TABLE subscription_plans ADD COLUMN IF NOT EXISTS stripe_price_id VARCHAR(255)",
+        "ALTER TABLE company_subscriptions ADD COLUMN IF NOT EXISTS stripe_customer_id VARCHAR(255)",
+        "ALTER TABLE company_subscriptions ADD COLUMN IF NOT EXISTS stripe_subscription_id VARCHAR(255)",
+        "ALTER TABLE company_subscriptions ADD COLUMN IF NOT EXISTS last_payment_at TIMESTAMP",
+    ]
+    async with engine.begin() as conn:
+        for sql in migrations:
+            try:
+                await conn.execute(text(sql))
+            except Exception as e:
+                logger.warning(f"Migration skipped: {sql[:60]}... ({e})")
+
+    # Seed default subscription plans + sync Stripe IDs from env
     try:
         from app.models.subscription_plan import SubscriptionPlan
+        from app.config import get_settings
         from sqlalchemy import select
         import uuid
+
+        s = get_settings()
+        stripe_prices = {
+            "starter": s.STRIPE_PRICE_STARTER,
+            "pro": s.STRIPE_PRICE_PRO,
+            "enterprise": s.STRIPE_PRICE_ENTERPRISE,
+        }
 
         defaults = [
             {"slug": "starter", "name": "Starter", "description": "Voor ZZP'ers en kleine ondernemers",
@@ -35,12 +59,22 @@ async def lifespan(app: FastAPI):
 
         async with async_session() as session:
             for d in defaults:
-                existing = await session.execute(select(SubscriptionPlan).where(SubscriptionPlan.slug == d["slug"]))
-                if existing.scalar_one_or_none():
-                    continue
-                session.add(SubscriptionPlan(id=uuid.uuid4(), is_active=True, **d))
+                existing_result = await session.execute(select(SubscriptionPlan).where(SubscriptionPlan.slug == d["slug"]))
+                existing = existing_result.scalar_one_or_none()
+                stripe_price_id = stripe_prices.get(d["slug"], "")
+                if existing:
+                    # Always sync the latest Stripe price ID from env
+                    if stripe_price_id and existing.stripe_price_id != stripe_price_id:
+                        existing.stripe_price_id = stripe_price_id
+                else:
+                    session.add(SubscriptionPlan(
+                        id=uuid.uuid4(),
+                        is_active=True,
+                        stripe_price_id=stripe_price_id or None,
+                        **d,
+                    ))
             await session.commit()
-        logger.info("Default subscription plans seeded")
+        logger.info("Default subscription plans seeded + Stripe IDs synced")
     except Exception as e:
         logger.warning(f"Could not seed plans: {e}")
 

@@ -25,7 +25,10 @@ class CompanySubscription(Base):
     ai_credits_used: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     ai_cost_eur_cents: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
 
-    status: Mapped[str] = mapped_column(String(20), nullable=False, default="active")  # active, paused, cancelled
+    status: Mapped[str] = mapped_column(String(20), nullable=False, default="active")  # active, paused, cancelled, past_due, trialing
+    stripe_customer_id: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    stripe_subscription_id: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    last_payment_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
 

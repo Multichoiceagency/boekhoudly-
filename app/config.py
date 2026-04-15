@@ -55,6 +55,16 @@ class Settings(BaseSettings):
     # Self-registration toggle — when False, verify-code rejects unknown emails
     ALLOW_SELF_REGISTRATION: bool = False
 
+    # Stripe billing integration
+    STRIPE_SECRET_KEY: str = ""
+    STRIPE_PUBLISHABLE_KEY: str = ""
+    STRIPE_WEBHOOK_SECRET: str = ""
+    STRIPE_PRICE_STARTER: str = ""
+    STRIPE_PRICE_PRO: str = ""
+    STRIPE_PRICE_ENTERPRISE: str = ""
+    STRIPE_SUCCESS_URL: str = "https://app.fiscaalflow.nl/facturering?stripe=success"
+    STRIPE_CANCEL_URL: str = "https://app.fiscaalflow.nl/facturering?stripe=cancelled"
+
     # Google Drive
     GOOGLE_DRIVE_CLIENT_ID: str = ""
     GOOGLE_DRIVE_CLIENT_SECRET: str = ""
