@@ -273,25 +273,57 @@ async def get_me(current_user: User = Depends(get_current_user)):
 
 
 @router.post("/init-admin", response_model=Token, status_code=201)
-async def init_admin(db: AsyncSession = Depends(get_db)):
-    """Maak een standaard admin account aan (alleen als er nog geen admin bestaat)."""
-    existing_admin = await db.execute(select(User).where(User.role == "admin"))
-    if existing_admin.scalar_one_or_none():
-        raise HTTPException(status_code=400, detail="Er bestaat al een admin account")
+async def init_admin(request: Request, db: AsyncSession = Depends(get_db), data: dict | None = None):
+    """Idempotent admin setup: create or promote a user to admin with onboarding complete.
 
-    admin = User(
-        id=uuid.uuid4(),
-        email="admin@boekhoudly.nl",
-        hashed_password=get_password_hash("Admin123!"),
-        full_name="Beheerder",
-        role="admin",
-        onboarding_completed=True,
-        onboarding_step=5,
-    )
-    db.add(admin)
+    Body (optional):
+      - email: the admin email (default: info@fiscaalflow.nl)
+      - full_name: the admin's display name
+      - password: optional password for password login
+
+    Protected by X-Nuxt-Secret to prevent abuse. Call it once to bootstrap
+    the admin; call it again to re-promote if onboarding got rolled back.
+    """
+    nuxt_secret = getattr(settings, "NUXT_INTERNAL_SECRET", "")
+    incoming_secret = request.headers.get("X-Nuxt-Secret", "")
+    if not nuxt_secret or incoming_secret != nuxt_secret:
+        raise HTTPException(status_code=403, detail="Unauthorized")
+
+    payload = data or {}
+    email = (payload.get("email") or "info@fiscaalflow.nl").strip().lower()
+    full_name = payload.get("full_name") or "FiscaalFlow Admin"
+    password = payload.get("password")
+
+    result = await db.execute(select(User).where(User.email == email))
+    user = result.scalar_one_or_none()
+
+    if user:
+        # Promote existing user to admin + mark onboarding complete
+        user.role = "admin"
+        user.onboarding_completed = True
+        user.onboarding_step = 5
+        if full_name and not user.full_name:
+            user.full_name = full_name
+        if password:
+            user.hashed_password = get_password_hash(password)
+        action = "promoted"
+    else:
+        user = User(
+            id=uuid.uuid4(),
+            email=email,
+            hashed_password=get_password_hash(password) if password else None,
+            full_name=full_name,
+            role="admin",
+            onboarding_completed=True,
+            onboarding_step=5,
+        )
+        db.add(user)
+        action = "created"
+
     await db.flush()
+    logger.info(f"Admin {action}: {email}")
 
-    token = create_access_token({"sub": str(admin.id)})
+    token = create_access_token({"sub": str(user.id)})
     return Token(access_token=token, is_new_user=False)
 
 
