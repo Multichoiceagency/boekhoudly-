@@ -10,10 +10,40 @@ logger = logging.getLogger(__name__)
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     # Startup
-    from app.database import init_db
+    from app.database import init_db, async_session
     import app.models  # noqa: ensure all models are imported
     await init_db()
     logger.info("FiscalFlow AI API gestart - database tables ready")
+
+    # Seed default subscription plans
+    try:
+        from app.models.subscription_plan import SubscriptionPlan
+        from sqlalchemy import select
+        import uuid
+
+        defaults = [
+            {"slug": "starter", "name": "Starter", "description": "Voor ZZP'ers en kleine ondernemers",
+             "monthly_eur": 19.00, "ai_credits_included": 100, "ai_overage_eur_cents": 20, "max_users": 1, "sort_order": 1,
+             "features": {"facturen": True, "bank": True, "btw": True, "ai_basic": True}},
+            {"slug": "pro", "name": "Pro", "description": "Voor groeiende bedrijven met meerdere medewerkers",
+             "monthly_eur": 49.00, "ai_credits_included": 500, "ai_overage_eur_cents": 10, "max_users": 5, "sort_order": 2,
+             "features": {"facturen": True, "bank": True, "btw": True, "ai_basic": True, "ai_advanced": True, "rapportage": True, "uren": True}},
+            {"slug": "enterprise", "name": "Enterprise", "description": "Voor accountantskantoren en grote organisaties",
+             "monthly_eur": 149.00, "ai_credits_included": 2000, "ai_overage_eur_cents": 5, "max_users": 25, "sort_order": 3,
+             "features": {"facturen": True, "bank": True, "btw": True, "ai_basic": True, "ai_advanced": True, "rapportage": True, "uren": True, "audit": True, "multi_company": True, "api_access": True}},
+        ]
+
+        async with async_session() as session:
+            for d in defaults:
+                existing = await session.execute(select(SubscriptionPlan).where(SubscriptionPlan.slug == d["slug"]))
+                if existing.scalar_one_or_none():
+                    continue
+                session.add(SubscriptionPlan(id=uuid.uuid4(), is_active=True, **d))
+            await session.commit()
+        logger.info("Default subscription plans seeded")
+    except Exception as e:
+        logger.warning(f"Could not seed plans: {e}")
+
     yield
     # Shutdown
     logger.info("FiscalFlow AI API gestopt")
@@ -34,7 +64,7 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-from app.api import auth, upload, transactions, vat, ai, bank, cloud_storage, perfex, admin, workspace, webhooks, kvk
+from app.api import auth, upload, transactions, vat, ai, bank, cloud_storage, perfex, admin, workspace, webhooks, kvk, billing
 
 app.include_router(auth.router, prefix="/api")
 app.include_router(upload.router, prefix="/api")
@@ -48,6 +78,7 @@ app.include_router(admin.router, prefix="/api")
 app.include_router(workspace.router, prefix="/api")
 app.include_router(webhooks.router, prefix="/api")
 app.include_router(kvk.router, prefix="/api")
+app.include_router(billing.router, prefix="/api")
 
 
 @app.get("/health")

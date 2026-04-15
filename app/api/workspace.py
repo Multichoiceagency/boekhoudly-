@@ -31,13 +31,47 @@ def _company_id(user: User) -> uuid.UUID:
 # ============================================================
 @router.get("/companies")
 async def list_companies(user: User = Depends(get_current_user), db: AsyncSession = Depends(get_db)):
-    result = await db.execute(select(Company).where(Company.id == user.company_id))
-    companies = result.scalars().all()
+    """Return companies the user is allowed to see.
+
+    - admin: all companies
+    - accountant: companies they own via CompanySubscription.accountant_id
+                  + their own home company
+    - user: only their own company
+    """
+    from app.models.company_subscription import CompanySubscription
+
+    if user.role == "admin":
+        result = await db.execute(select(Company).order_by(Company.created_at.desc()))
+        companies = result.scalars().all()
+    elif user.role == "accountant":
+        sub_result = await db.execute(
+            select(CompanySubscription.company_id).where(CompanySubscription.accountant_id == user.id)
+        )
+        ids = [r[0] for r in sub_result.all()]
+        if user.company_id and user.company_id not in ids:
+            ids.append(user.company_id)
+        if not ids:
+            return []
+        result = await db.execute(select(Company).where(Company.id.in_(ids)).order_by(Company.created_at.desc()))
+        companies = result.scalars().all()
+    else:
+        if not user.company_id:
+            return []
+        result = await db.execute(select(Company).where(Company.id == user.company_id))
+        companies = result.scalars().all()
+
     return [_company_to_dict(c) for c in companies]
 
 
 @router.post("/companies", status_code=201)
 async def create_company(data: dict, user: User = Depends(get_current_user), db: AsyncSession = Depends(get_db)):
+    """Create a company. If the user is an accountant, automatically create
+    a CompanySubscription linking the accountant to the new company so it
+    appears on their billing summary."""
+    from app.models.subscription_plan import SubscriptionPlan
+    from app.models.company_subscription import CompanySubscription
+    from datetime import date
+
     c = Company(
         id=uuid.uuid4(),
         name=data.get("name", ""),
@@ -54,9 +88,37 @@ async def create_company(data: dict, user: User = Depends(get_current_user), db:
     )
     db.add(c)
     await db.flush()
+
     if not user.company_id:
         user.company_id = c.id
         await db.flush()
+
+    # Auto-create subscription for accountants and admins
+    if user.role in ("accountant", "admin"):
+        plan_slug = data.get("plan_slug", "starter")
+        plan_result = await db.execute(select(SubscriptionPlan).where(SubscriptionPlan.slug == plan_slug))
+        plan = plan_result.scalar_one_or_none()
+        if not plan:
+            # Fallback to any active plan
+            any_plan_result = await db.execute(
+                select(SubscriptionPlan).where(SubscriptionPlan.is_active == True).order_by(SubscriptionPlan.sort_order)
+            )
+            plan = any_plan_result.scalars().first()
+
+        if plan:
+            sub = CompanySubscription(
+                id=uuid.uuid4(),
+                company_id=c.id,
+                plan_id=plan.id,
+                accountant_id=user.id if user.role == "accountant" else None,
+                period_start=date.today(),
+                ai_credits_used=0,
+                ai_cost_eur_cents=0,
+                status="active",
+            )
+            db.add(sub)
+            await db.flush()
+
     return _company_to_dict(c)
 
 
