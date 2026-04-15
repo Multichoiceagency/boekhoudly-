@@ -1,5 +1,6 @@
 import logging
 import json
+import httpx
 from app.config import get_settings
 
 logger = logging.getLogger(__name__)
@@ -38,133 +39,188 @@ BTW percentages: 21% (standaard), 9% (laag tarief), 0% (vrijgesteld)
 
 Wees precies en geef een realistisch confidence_score tussen 0.0 en 1.0."""
 
-CHAT_PROMPT = """Je bent FiscalFlow AI, een slimme boekhouding-assistent voor Nederlandse ondernemers.
+CHAT_SYSTEM_PROMPT = """Je bent FiscalFlow AI, een slimme boekhouding-assistent voor Nederlandse ondernemers.
 Je helpt met vragen over boekhouding, BTW, belastingen en financieel beheer.
 Antwoord altijd in het Nederlands, bondig en praktisch.
-Als je het antwoord niet zeker weet, zeg dat eerlijk.
+Als je het antwoord niet zeker weet, zeg dat eerlijk."""
 
-Gebruiker vraagt: {message}"""
+
+def _pick_provider() -> str:
+    """Pick AI provider based on AI_PROVIDER setting + which credentials are configured."""
+    pref = (settings.AI_PROVIDER or "auto").lower()
+    if pref != "auto":
+        return pref
+    if settings.OLLAMA_BASE_URL:
+        return "ollama"
+    if settings.OPENAI_API_KEY:
+        return "openai"
+    if settings.ANTHROPIC_API_KEY:
+        return "anthropic"
+    return "fallback"
 
 
 class AIClassifierService:
     """AI-service voor het classificeren van transacties en beantwoorden van vragen."""
 
     async def classify_transaction(self, description: str, amount: float) -> dict:
-        """Classificeer een transactie met AI."""
         prompt = CLASSIFICATION_PROMPT.format(description=description, amount=amount)
+        provider = _pick_provider()
 
-        # Try OpenAI first, then Anthropic, then fallback
-        if settings.OPENAI_API_KEY:
-            return await self._classify_openai(prompt)
-        elif settings.ANTHROPIC_API_KEY:
-            return await self._classify_anthropic(prompt)
-        else:
-            return self._classify_fallback(description, amount)
-
-    async def _classify_openai(self, prompt: str) -> dict:
-        """Classificeer via OpenAI API."""
         try:
-            import openai
-
-            client = openai.AsyncOpenAI(api_key=settings.OPENAI_API_KEY)
-            response = await client.chat.completions.create(
-                model="gpt-4o-mini",
-                messages=[{"role": "user", "content": prompt}],
-                temperature=0.1,
-                response_format={"type": "json_object"},
-            )
-            content = response.choices[0].message.content
-            return json.loads(content)
+            if provider == "ollama":
+                return await self._classify_ollama(prompt)
+            if provider == "openai":
+                return await self._classify_openai(prompt)
+            if provider == "anthropic":
+                return await self._classify_anthropic(prompt)
         except Exception as e:
-            logger.error(f"OpenAI classificatie fout: {e}")
-            return self._classify_fallback("", 0)
+            logger.warning(f"AI classify via {provider} failed, falling back: {e}")
 
-    async def _classify_anthropic(self, prompt: str) -> dict:
-        """Classificeer via Anthropic API."""
+        return self._classify_fallback(description, amount)
+
+    async def chat(self, message: str) -> str:
+        provider = _pick_provider()
+
         try:
-            import anthropic
+            if provider == "ollama":
+                return await self._chat_ollama(message)
+            if provider == "openai":
+                return await self._chat_openai(message)
+            if provider == "anthropic":
+                return await self._chat_anthropic(message)
+        except Exception as e:
+            logger.warning(f"AI chat via {provider} failed: {e}")
 
-            client = anthropic.AsyncAnthropic(api_key=settings.ANTHROPIC_API_KEY)
-            response = await client.messages.create(
-                model="claude-sonnet-4-20250514",
-                max_tokens=500,
-                messages=[{"role": "user", "content": prompt}],
+        if provider == "fallback":
+            return (
+                "De AI-assistent is nog niet geconfigureerd. "
+                "Stel `OLLAMA_BASE_URL` in voor lokale modellen, of `OPENAI_API_KEY`/`ANTHROPIC_API_KEY` "
+                "voor cloud providers. Dit kan in de admin-instellingen of via Coolify env vars."
             )
-            content = response.content[0].text
-            # Extract JSON from response
-            start = content.find("{")
-            end = content.rfind("}") + 1
+        return f"De AI-assistent ({provider}) is tijdelijk niet bereikbaar. Probeer het later opnieuw."
+
+    # ------------------------------------------------------------------
+    # Ollama
+    # ------------------------------------------------------------------
+    async def _ollama_chat_raw(self, messages: list, model: str | None = None, json_mode: bool = False) -> str:
+        base = settings.OLLAMA_BASE_URL.rstrip("/")
+        if not base:
+            raise RuntimeError("OLLAMA_BASE_URL niet ingesteld")
+        body: dict = {
+            "model": model or settings.OLLAMA_MODEL,
+            "messages": messages,
+            "stream": False,
+            "options": {"temperature": 0.2 if json_mode else 0.4},
+        }
+        if json_mode:
+            body["format"] = "json"
+
+        async with httpx.AsyncClient(timeout=120) as client:
+            r = await client.post(f"{base}/api/chat", json=body)
+            r.raise_for_status()
+            data = r.json()
+        return (data.get("message") or {}).get("content", "")
+
+    async def _classify_ollama(self, prompt: str) -> dict:
+        model = settings.OLLAMA_CLASSIFY_MODEL or settings.OLLAMA_MODEL
+        content = await self._ollama_chat_raw(
+            [{"role": "user", "content": prompt}],
+            model=model,
+            json_mode=True,
+        )
+        try:
+            return json.loads(content)
+        except Exception:
+            start, end = content.find("{"), content.rfind("}") + 1
             if start >= 0 and end > start:
                 return json.loads(content[start:end])
-            return self._classify_fallback("", 0)
-        except Exception as e:
-            logger.error(f"Anthropic classificatie fout: {e}")
-            return self._classify_fallback("", 0)
+            raise
 
+    async def _chat_ollama(self, message: str) -> str:
+        return await self._ollama_chat_raw([
+            {"role": "system", "content": CHAT_SYSTEM_PROMPT},
+            {"role": "user", "content": message},
+        ])
+
+    # ------------------------------------------------------------------
+    # OpenAI
+    # ------------------------------------------------------------------
+    async def _classify_openai(self, prompt: str) -> dict:
+        import openai
+        client = openai.AsyncOpenAI(api_key=settings.OPENAI_API_KEY)
+        response = await client.chat.completions.create(
+            model="gpt-4o-mini",
+            messages=[{"role": "user", "content": prompt}],
+            temperature=0.1,
+            response_format={"type": "json_object"},
+        )
+        return json.loads(response.choices[0].message.content)
+
+    async def _chat_openai(self, message: str) -> str:
+        import openai
+        client = openai.AsyncOpenAI(api_key=settings.OPENAI_API_KEY)
+        response = await client.chat.completions.create(
+            model="gpt-4o-mini",
+            messages=[
+                {"role": "system", "content": CHAT_SYSTEM_PROMPT},
+                {"role": "user", "content": message},
+            ],
+            temperature=0.3,
+        )
+        return response.choices[0].message.content
+
+    # ------------------------------------------------------------------
+    # Anthropic
+    # ------------------------------------------------------------------
+    async def _classify_anthropic(self, prompt: str) -> dict:
+        import anthropic
+        client = anthropic.AsyncAnthropic(api_key=settings.ANTHROPIC_API_KEY)
+        response = await client.messages.create(
+            model="claude-sonnet-4-5",
+            max_tokens=500,
+            messages=[{"role": "user", "content": prompt}],
+        )
+        content = response.content[0].text
+        start, end = content.find("{"), content.rfind("}") + 1
+        if start >= 0 and end > start:
+            return json.loads(content[start:end])
+        raise ValueError("Anthropic returned no JSON")
+
+    async def _chat_anthropic(self, message: str) -> str:
+        import anthropic
+        client = anthropic.AsyncAnthropic(api_key=settings.ANTHROPIC_API_KEY)
+        response = await client.messages.create(
+            model="claude-sonnet-4-5",
+            max_tokens=1000,
+            system=CHAT_SYSTEM_PROMPT,
+            messages=[{"role": "user", "content": message}],
+        )
+        return response.content[0].text
+
+    # ------------------------------------------------------------------
+    # Fallback
+    # ------------------------------------------------------------------
     def _classify_fallback(self, description: str, amount: float) -> dict:
-        """Eenvoudige regel-gebaseerde classificatie als fallback."""
-        desc_lower = description.lower()
-
+        desc_lower = (description or "").lower()
         category_rules = {
-            "Marketing & Reclame": ["facebook", "google ads", "advertentie", "marketing", "reclame"],
-            "Software & Licenties": ["software", "saas", "licentie", "abonnement", "github", "aws", "hosting"],
+            "Marketing & Reclame": ["facebook", "google ads", "advertentie", "marketing", "reclame", "linkedin"],
+            "Software & Licenties": ["software", "saas", "licentie", "abonnement", "github", "aws", "hosting", "openai", "anthropic"],
             "Kantoorkosten": ["kantoor", "pennen", "papier", "printer", "bureau"],
-            "Transport & Reizen": ["trein", "ns", "benzine", "parkeren", "ov", "uber", "taxi", "vlucht"],
-            "Verzekeringen": ["verzekering", "polis"],
-            "Telefoon & Internet": ["telefoon", "internet", "mobiel", "kpn", "vodafone", "t-mobile"],
-            "Huur & Huisvesting": ["huur", "gas", "water", "elektra", "energie"],
+            "Transport & Reizen": ["trein", "ns", "benzine", "parkeren", "ov", "uber", "taxi", "vlucht", "shell", "bp"],
+            "Verzekeringen": ["verzekering", "polis", "aon", "centraal beheer"],
+            "Telefoon & Internet": ["telefoon", "internet", "mobiel", "kpn", "vodafone", "t-mobile", "ziggo"],
+            "Huur & Huisvesting": ["huur", "gas", "water", "elektra", "energie", "vattenfall", "essent"],
             "Personeel & Salaris": ["salaris", "loon", "personeel"],
         }
-
         category = "Overige kosten"
         for cat, keywords in category_rules.items():
             if any(kw in desc_lower for kw in keywords):
                 category = cat
                 break
-
-        tx_type = "income" if amount > 0 else "expense"
-
         return {
             "category": category,
             "btw_percentage": 21.0,
-            "type": tx_type,
+            "type": "income" if amount > 0 else "expense",
             "confidence_score": 0.6,
-            "explanation": f"Automatisch geclassificeerd als '{category}' op basis van sleutelwoorden.",
+            "explanation": f"Automatisch geclassificeerd als '{category}' op basis van sleutelwoorden (geen LLM beschikbaar).",
         }
-
-    async def chat(self, message: str) -> str:
-        """Beantwoord een boekhoudkundige vraag."""
-        prompt = CHAT_PROMPT.format(message=message)
-
-        if settings.OPENAI_API_KEY:
-            try:
-                import openai
-
-                client = openai.AsyncOpenAI(api_key=settings.OPENAI_API_KEY)
-                response = await client.chat.completions.create(
-                    model="gpt-4o-mini",
-                    messages=[{"role": "user", "content": prompt}],
-                    temperature=0.3,
-                )
-                return response.choices[0].message.content
-            except Exception as e:
-                logger.error(f"OpenAI chat fout: {e}")
-
-        if settings.ANTHROPIC_API_KEY:
-            try:
-                import anthropic
-
-                client = anthropic.AsyncAnthropic(api_key=settings.ANTHROPIC_API_KEY)
-                response = await client.messages.create(
-                    model="claude-sonnet-4-20250514",
-                    max_tokens=1000,
-                    messages=[{"role": "user", "content": prompt}],
-                )
-                return response.content[0].text
-            except Exception as e:
-                logger.error(f"Anthropic chat fout: {e}")
-
-        return (
-            "Op dit moment is de AI-assistent niet beschikbaar. "
-            "Configureer een OpenAI of Anthropic API key om deze functie te gebruiken."
-        )

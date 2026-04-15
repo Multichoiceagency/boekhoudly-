@@ -14,6 +14,12 @@ class Settings(BaseSettings):
     OPENAI_API_KEY: str = ""
     ANTHROPIC_API_KEY: str = ""
 
+    # Ollama (local / self-hosted LLM) — works without paid API keys
+    OLLAMA_BASE_URL: str = ""  # e.g. http://ollama:11434 or http://host.docker.internal:11434
+    OLLAMA_MODEL: str = "llama3.2"
+    OLLAMA_CLASSIFY_MODEL: str = ""  # optional override for classification
+    AI_PROVIDER: str = "auto"  # auto, openai, anthropic, ollama, fallback
+
     JWT_SECRET: str = "change-this-to-a-random-secret"
     JWT_ALGORITHM: str = "HS256"
     JWT_EXPIRATION_MINUTES: int = 1440

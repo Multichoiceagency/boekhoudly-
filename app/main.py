@@ -25,6 +25,7 @@ async def lifespan(app: FastAPI):
         "ALTER TABLE company_subscriptions ADD COLUMN IF NOT EXISTS last_payment_at TIMESTAMP",
         "CREATE INDEX IF NOT EXISTS ix_crm_lookup ON crm_records (provider, resource, external_id)",
         "CREATE INDEX IF NOT EXISTS ix_crm_company_resource ON crm_records (company_id, resource)",
+        "CREATE UNIQUE INDEX IF NOT EXISTS ix_integration_company_provider ON integration_connections (company_id, provider)",
     ]
     async with engine.begin() as conn:
         for sql in migrations:
