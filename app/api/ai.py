@@ -1,13 +1,16 @@
+import httpx
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 from sqlalchemy.ext.asyncio import AsyncSession
 from app.database import get_db
 from app.models.user import User
-from app.services.ai_classifier import AIClassifierService
+from app.services.ai_classifier import AIClassifierService, _pick_provider
 from app.services.ai_usage_tracker import track_ai_usage
 from app.utils.auth import get_current_user
+from app.config import get_settings
 
 router = APIRouter(prefix="/ai", tags=["AI"])
+settings = get_settings()
 
 
 class ClassifyRequest(BaseModel):
@@ -76,6 +79,58 @@ async def ai_chat(
         credits_remaining=usage.get("credits_remaining"),
         over_quota=usage.get("over_quota"),
     )
+
+
+@router.get("/status")
+async def ai_status(current_user: User = Depends(get_current_user)):
+    """Diagnose: which AI provider is active + Ollama reachability + installed models."""
+    provider = _pick_provider()
+    out: dict = {
+        "active_provider": provider,
+        "ai_provider_setting": settings.AI_PROVIDER,
+        "openai_configured": bool(settings.OPENAI_API_KEY),
+        "anthropic_configured": bool(settings.ANTHROPIC_API_KEY),
+        "ollama_base_url": settings.OLLAMA_BASE_URL,
+        "ollama_model": settings.OLLAMA_MODEL,
+    }
+    if settings.OLLAMA_BASE_URL:
+        try:
+            async with httpx.AsyncClient(timeout=10) as client:
+                r = await client.get(f"{settings.OLLAMA_BASE_URL.rstrip('/')}/api/tags")
+            if r.status_code == 200:
+                tags = r.json().get("models", [])
+                out["ollama_reachable"] = True
+                out["ollama_models"] = [m.get("name") for m in tags]
+            else:
+                out["ollama_reachable"] = False
+                out["ollama_error"] = f"HTTP {r.status_code}"
+        except Exception as e:
+            out["ollama_reachable"] = False
+            out["ollama_error"] = str(e)[:200]
+    return out
+
+
+@router.post("/ollama/pull")
+async def ollama_pull(data: dict, current_user: User = Depends(get_current_user)):
+    """Trigger Ollama to download a model. Streams progress until done.
+    Body: {"model": "llama3.2:3b"}. Admin-only."""
+    if current_user.role != "admin":
+        raise HTTPException(status_code=403, detail="Alleen admins")
+    if not settings.OLLAMA_BASE_URL:
+        raise HTTPException(status_code=503, detail="OLLAMA_BASE_URL niet ingesteld")
+
+    model = data.get("model") or settings.OLLAMA_MODEL
+    try:
+        async with httpx.AsyncClient(timeout=900) as client:
+            r = await client.post(
+                f"{settings.OLLAMA_BASE_URL.rstrip('/')}/api/pull",
+                json={"name": model, "stream": False},
+            )
+        if r.status_code != 200:
+            raise HTTPException(status_code=502, detail=f"Ollama pull HTTP {r.status_code}: {r.text[:200]}")
+        return {"status": "pulled", "model": model}
+    except httpx.HTTPError as e:
+        raise HTTPException(status_code=502, detail=f"Ollama onbereikbaar: {str(e)[:200]}")
 
 
 @router.get("/insights", response_model=list[InsightItem])
