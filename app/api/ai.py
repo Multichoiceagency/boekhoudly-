@@ -88,6 +88,8 @@ async def ai_status(current_user: User = Depends(get_current_user)):
     out: dict = {
         "active_provider": provider,
         "ai_provider_setting": settings.AI_PROVIDER,
+        "groq_configured": bool(settings.GROQ_API_KEY),
+        "groq_model": settings.GROQ_MODEL,
         "openai_configured": bool(settings.OPENAI_API_KEY),
         "anthropic_configured": bool(settings.ANTHROPIC_API_KEY),
         "ollama_base_url": settings.OLLAMA_BASE_URL,

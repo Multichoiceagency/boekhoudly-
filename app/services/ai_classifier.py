@@ -50,12 +50,15 @@ def _pick_provider() -> str:
     pref = (settings.AI_PROVIDER or "auto").lower()
     if pref != "auto":
         return pref
-    if settings.OLLAMA_BASE_URL:
-        return "ollama"
+    # Auto order: Groq (free + fast) → OpenAI → Anthropic → Ollama → fallback
+    if settings.GROQ_API_KEY:
+        return "groq"
     if settings.OPENAI_API_KEY:
         return "openai"
     if settings.ANTHROPIC_API_KEY:
         return "anthropic"
+    if settings.OLLAMA_BASE_URL:
+        return "ollama"
     return "fallback"
 
 
@@ -67,6 +70,8 @@ class AIClassifierService:
         provider = _pick_provider()
 
         try:
+            if provider == "groq":
+                return await self._classify_groq(prompt)
             if provider == "ollama":
                 return await self._classify_ollama(prompt)
             if provider == "openai":
@@ -82,6 +87,8 @@ class AIClassifierService:
         provider = _pick_provider()
 
         try:
+            if provider == "groq":
+                return await self._chat_groq(message)
             if provider == "ollama":
                 return await self._chat_ollama(message)
             if provider == "openai":
@@ -93,11 +100,53 @@ class AIClassifierService:
 
         if provider == "fallback":
             return (
-                "De AI-assistent is nog niet geconfigureerd. "
-                "Stel `OLLAMA_BASE_URL` in voor lokale modellen, of `OPENAI_API_KEY`/`ANTHROPIC_API_KEY` "
-                "voor cloud providers. Dit kan in de admin-instellingen of via Coolify env vars."
+                "De AI-assistent is nog niet geconfigureerd. Tip: maak een gratis Groq account aan op "
+                "https://console.groq.com/keys en zet `GROQ_API_KEY` als env var. Dit geeft je "
+                "snelle inferentie zonder kosten."
             )
         return f"De AI-assistent ({provider}) is tijdelijk niet bereikbaar. Probeer het later opnieuw."
+
+    # ------------------------------------------------------------------
+    # Groq (OpenAI-compatible REST API, free tier, LPU acceleration)
+    # ------------------------------------------------------------------
+    async def _groq_chat_raw(self, messages: list, json_mode: bool = False) -> str:
+        if not settings.GROQ_API_KEY:
+            raise RuntimeError("GROQ_API_KEY niet ingesteld")
+        body: dict = {
+            "model": settings.GROQ_MODEL,
+            "messages": messages,
+            "temperature": 0.2 if json_mode else 0.4,
+        }
+        if json_mode:
+            body["response_format"] = {"type": "json_object"}
+        async with httpx.AsyncClient(timeout=60) as client:
+            r = await client.post(
+                "https://api.groq.com/openai/v1/chat/completions",
+                json=body,
+                headers={"Authorization": f"Bearer {settings.GROQ_API_KEY}"},
+            )
+            r.raise_for_status()
+            data = r.json()
+        return data["choices"][0]["message"]["content"]
+
+    async def _classify_groq(self, prompt: str) -> dict:
+        content = await self._groq_chat_raw(
+            [{"role": "user", "content": prompt}],
+            json_mode=True,
+        )
+        try:
+            return json.loads(content)
+        except Exception:
+            start, end = content.find("{"), content.rfind("}") + 1
+            if start >= 0 and end > start:
+                return json.loads(content[start:end])
+            raise
+
+    async def _chat_groq(self, message: str) -> str:
+        return await self._groq_chat_raw([
+            {"role": "system", "content": CHAT_SYSTEM_PROMPT},
+            {"role": "user", "content": message},
+        ])
 
     # ------------------------------------------------------------------
     # Ollama

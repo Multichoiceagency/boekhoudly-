@@ -14,11 +14,17 @@ class Settings(BaseSettings):
     OPENAI_API_KEY: str = ""
     ANTHROPIC_API_KEY: str = ""
 
-    # Ollama (local / self-hosted LLM) — works without paid API keys
-    OLLAMA_BASE_URL: str = ""  # e.g. http://ollama:11434 or http://host.docker.internal:11434
+    # Groq — OpenAI-compatible API with LPU acceleration. Free tier available
+    # at https://console.groq.com/keys — instant inference for Llama models.
+    GROQ_API_KEY: str = ""
+    GROQ_MODEL: str = "llama-3.3-70b-versatile"
+
+    # Ollama (local / self-hosted LLM) — works without paid API keys but
+    # needs a GPU for usable speed. CPU-only inference is too slow for chat.
+    OLLAMA_BASE_URL: str = ""
     OLLAMA_MODEL: str = "llama3.2"
-    OLLAMA_CLASSIFY_MODEL: str = ""  # optional override for classification
-    AI_PROVIDER: str = "auto"  # auto, openai, anthropic, ollama, fallback
+    OLLAMA_CLASSIFY_MODEL: str = ""
+    AI_PROVIDER: str = "auto"  # auto, groq, openai, anthropic, ollama, fallback
 
     JWT_SECRET: str = "change-this-to-a-random-secret"
     JWT_ALGORITHM: str = "HS256"
