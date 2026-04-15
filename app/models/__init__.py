@@ -11,9 +11,11 @@ from app.models.expense import Expense
 from app.models.debtor import Debtor
 from app.models.creditor import Creditor
 from app.models.bank_transaction import BankTransaction
+from app.models.webhook_event import WebhookEvent
 
 __all__ = [
     "User", "Company", "Transaction", "Document", "LedgerEntry",
     "VATReport", "BankConnection", "CloudConnection",
     "Invoice", "Expense", "Debtor", "Creditor", "BankTransaction",
+    "WebhookEvent",
 ]

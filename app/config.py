@@ -43,6 +43,12 @@ class Settings(BaseSettings):
     # Frontend URL
     FRONTEND_URL: str = "http://localhost:3000"
 
+    # Nuxt internal shared secret (for email code retrieval from Nuxt server)
+    NUXT_INTERNAL_SECRET: str = ""
+
+    # SnelStart webhook signing secret (HMAC-SHA256)
+    SNELSTART_WEBHOOK_SECRET: str = ""
+
     # Google Drive
     GOOGLE_DRIVE_CLIENT_ID: str = ""
     GOOGLE_DRIVE_CLIENT_SECRET: str = ""
