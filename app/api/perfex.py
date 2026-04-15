@@ -194,7 +194,7 @@ async def sync_to_db(
         "subscriptions": "id",
         "leads": "id",
         "projects": "id",
-        "items": "id",
+        "items": "itemid",
         "tickets": "ticketid",
         "contracts": "id",
     }
