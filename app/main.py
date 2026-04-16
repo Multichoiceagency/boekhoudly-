@@ -26,6 +26,14 @@ async def lifespan(app: FastAPI):
         "CREATE INDEX IF NOT EXISTS ix_crm_lookup ON crm_records (provider, resource, external_id)",
         "CREATE INDEX IF NOT EXISTS ix_crm_company_resource ON crm_records (company_id, resource)",
         "CREATE UNIQUE INDEX IF NOT EXISTS ix_integration_company_provider ON integration_connections (company_id, provider)",
+        "ALTER TABLE invoices ADD COLUMN IF NOT EXISTS source VARCHAR(50) DEFAULT 'manual'",
+        "ALTER TABLE invoices ADD COLUMN IF NOT EXISTS source_id VARCHAR(255)",
+        "ALTER TABLE debtors ADD COLUMN IF NOT EXISTS source VARCHAR(50) DEFAULT 'manual'",
+        "ALTER TABLE debtors ADD COLUMN IF NOT EXISTS source_id VARCHAR(255)",
+        "ALTER TABLE creditors ADD COLUMN IF NOT EXISTS source VARCHAR(50) DEFAULT 'manual'",
+        "ALTER TABLE creditors ADD COLUMN IF NOT EXISTS source_id VARCHAR(255)",
+        "ALTER TABLE expenses ADD COLUMN IF NOT EXISTS source VARCHAR(50) DEFAULT 'manual'",
+        "ALTER TABLE expenses ADD COLUMN IF NOT EXISTS source_id VARCHAR(255)",
     ]
     async with engine.begin() as conn:
         for sql in migrations:
@@ -101,7 +109,7 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-from app.api import auth, upload, transactions, vat, ai, bank, cloud_storage, perfex, admin, workspace, webhooks, kvk, billing, integrations, analyse
+from app.api import auth, upload, transactions, vat, ai, bank, cloud_storage, perfex, admin, workspace, webhooks, kvk, billing, integrations, analyse, crm_import, uitstel
 
 app.include_router(auth.router, prefix="/api")
 app.include_router(upload.router, prefix="/api")
@@ -118,6 +126,8 @@ app.include_router(kvk.router, prefix="/api")
 app.include_router(billing.router, prefix="/api")
 app.include_router(integrations.router, prefix="/api")
 app.include_router(analyse.router, prefix="/api")
+app.include_router(crm_import.router, prefix="/api")
+app.include_router(uitstel.router, prefix="/api")
 
 
 @app.get("/health")

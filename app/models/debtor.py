@@ -19,6 +19,8 @@ class Debtor(Base):
     payment_term: Mapped[int] = mapped_column(Integer, default=30)
     address: Mapped[str | None] = mapped_column(String(500), nullable=True)
     city: Mapped[str | None] = mapped_column(String(100), nullable=True)
+    source: Mapped[str] = mapped_column(String(50), default="manual")
+    source_id: Mapped[str | None] = mapped_column(String(255), nullable=True)
 
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
 

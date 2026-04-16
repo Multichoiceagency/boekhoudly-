@@ -16,6 +16,8 @@ class Creditor(Base):
     category: Mapped[str] = mapped_column(String(100), default="Overig")
     iban: Mapped[str | None] = mapped_column(String(34), nullable=True)
     payment_term: Mapped[int] = mapped_column(Integer, default=30)
+    source: Mapped[str] = mapped_column(String(50), default="manual")
+    source_id: Mapped[str | None] = mapped_column(String(255), nullable=True)
 
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
 
