@@ -22,8 +22,8 @@ router = APIRouter(prefix="/import", tags=["Import"])
 
 
 async def _require_admin(current_user: User = Depends(get_current_user)) -> User:
-    if current_user.role != "admin":
-        raise HTTPException(status_code=403, detail="Alleen admins")
+    if current_user.role not in ("admin", "accountant"):
+        raise HTTPException(status_code=403, detail="Alleen admins en accountants hebben toegang")
     return current_user
 
 
