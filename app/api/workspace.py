@@ -231,6 +231,9 @@ def _inv_to_dict(i: Invoice) -> dict:
         "clientId": i.client_id or "", "date": str(i.date), "dueDate": str(i.due_date),
         "lines": i.lines or [], "status": i.status,
         "paidDate": str(i.paid_date) if i.paid_date else None,
+        "notes": i.notes or "",
+        "source": getattr(i, 'source', 'manual') or 'manual',
+        "sourceId": getattr(i, 'source_id', None),
     }
 
 
@@ -349,6 +352,8 @@ def _deb_to_dict(d: Debtor) -> dict:
         "id": str(d.id), "name": d.name, "email": d.email or "",
         "kvk": d.kvk or "", "btw": d.btw or "", "iban": d.iban or "",
         "paymentTerm": d.payment_term, "address": d.address or "", "city": d.city or "",
+        "source": getattr(d, 'source', 'manual') or 'manual',
+        "sourceId": getattr(d, 'source_id', None),
     }
 
 
