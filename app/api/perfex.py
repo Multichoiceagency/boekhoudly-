@@ -304,6 +304,18 @@ async def sync_status(
     }
 
 
+@router.delete("/clear-cache")
+async def clear_cache(
+    admin: User = Depends(require_admin),
+    db: AsyncSession = Depends(get_db),
+):
+    """Wis alle gecachete Perfex data + sync runs."""
+    await db.execute(delete(CrmRecord).where(CrmRecord.provider == PROVIDER))
+    await db.execute(delete(CrmSyncRun).where(CrmSyncRun.provider == PROVIDER))
+    await db.flush()
+    return {"status": "cleared", "provider": PROVIDER}
+
+
 @router.get("/cached/{resource}")
 async def get_cached(
     resource: str,
