@@ -20,7 +20,10 @@ from app.utils.auth import get_current_user
 router = APIRouter(prefix="/workspace", tags=["Workspace"])
 
 
-def _company_id(user: User) -> uuid.UUID:
+def _company_id(user: User) -> uuid.UUID | None:
+    """Return the user's company_id, or None for admins (meaning 'all companies')."""
+    if user.role == "admin":
+        return user.company_id  # may be None — caller handles it
     if not user.company_id:
         raise HTTPException(status_code=400, detail="Geen bedrijf gekoppeld aan je account")
     return user.company_id
@@ -178,7 +181,10 @@ def _company_to_dict(c: Company) -> dict:
 @router.get("/invoices")
 async def list_invoices(user: User = Depends(get_current_user), db: AsyncSession = Depends(get_db)):
     cid = _company_id(user)
-    result = await db.execute(select(Invoice).where(Invoice.company_id == cid).order_by(Invoice.date.desc()))
+    q = select(Invoice).order_by(Invoice.date.desc())
+    if cid:
+        q = q.where(Invoice.company_id == cid)
+    result = await db.execute(q)
     return [_inv_to_dict(i) for i in result.scalars().all()]
 
 
@@ -234,7 +240,10 @@ def _inv_to_dict(i: Invoice) -> dict:
 @router.get("/expenses")
 async def list_expenses(user: User = Depends(get_current_user), db: AsyncSession = Depends(get_db)):
     cid = _company_id(user)
-    result = await db.execute(select(Expense).where(Expense.company_id == cid).order_by(Expense.date.desc()))
+    q = select(Expense).order_by(Expense.date.desc())
+    if cid:
+        q = q.where(Expense.company_id == cid)
+    result = await db.execute(q)
     return [_exp_to_dict(e) for e in result.scalars().all()]
 
 
@@ -292,7 +301,10 @@ def _exp_to_dict(e: Expense) -> dict:
 @router.get("/debtors")
 async def list_debtors(user: User = Depends(get_current_user), db: AsyncSession = Depends(get_db)):
     cid = _company_id(user)
-    result = await db.execute(select(Debtor).where(Debtor.company_id == cid).order_by(Debtor.name))
+    q = select(Debtor).order_by(Debtor.name)
+    if cid:
+        q = q.where(Debtor.company_id == cid)
+    result = await db.execute(q)
     return [_deb_to_dict(d) for d in result.scalars().all()]
 
 
@@ -346,7 +358,10 @@ def _deb_to_dict(d: Debtor) -> dict:
 @router.get("/creditors")
 async def list_creditors(user: User = Depends(get_current_user), db: AsyncSession = Depends(get_db)):
     cid = _company_id(user)
-    result = await db.execute(select(Creditor).where(Creditor.company_id == cid).order_by(Creditor.name))
+    q = select(Creditor).order_by(Creditor.name)
+    if cid:
+        q = q.where(Creditor.company_id == cid)
+    result = await db.execute(q)
     return [_cred_to_dict(c) for c in result.scalars().all()]
 
 
@@ -383,7 +398,10 @@ def _cred_to_dict(c: Creditor) -> dict:
 @router.get("/bank-transactions")
 async def list_bank_transactions(user: User = Depends(get_current_user), db: AsyncSession = Depends(get_db)):
     cid = _company_id(user)
-    result = await db.execute(select(BankTransaction).where(BankTransaction.company_id == cid).order_by(BankTransaction.date.desc()))
+    q = select(BankTransaction).order_by(BankTransaction.date.desc())
+    if cid:
+        q = q.where(BankTransaction.company_id == cid)
+    result = await db.execute(q)
     return [_bt_to_dict(t) for t in result.scalars().all()]
 
 
