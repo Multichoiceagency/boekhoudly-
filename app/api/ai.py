@@ -2,6 +2,7 @@ import httpx
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy import select
 from app.database import get_db
 from app.models.user import User
 from app.services.ai_classifier import AIClassifierService, _pick_provider
@@ -155,7 +156,11 @@ async def ai_chat(
 ):
     """Stel een boekhoudkundige vraag aan de AI — verrijkt met echte bedrijfsdata."""
     # Build data context from the user's actual workspace
-    data_context = await _build_data_context(current_user, db)
+    try:
+        data_context = await _build_data_context(current_user, db)
+    except Exception as e:
+        logger.warning(f"Failed to build data context: {e}")
+        data_context = "Bedrijfsdata kon niet worden geladen."
 
     enriched_message = f"""De gebruiker stelt een vraag over hun boekhouding. Gebruik de onderstaande ECHTE bedrijfsdata
 om een concreet, specifiek antwoord te geven met echte cijfers. Verwijs naar specifieke facturen,
