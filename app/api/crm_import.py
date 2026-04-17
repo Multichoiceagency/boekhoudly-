@@ -95,9 +95,19 @@ async def import_perfex_invoices(
     admin: User = Depends(_require_admin),
     db: AsyncSession = Depends(get_db),
 ):
-    """Import Perfex invoices as FiscaalFlow invoices."""
+    """Import Perfex invoices with resolved client names and full detail."""
     if not admin.company_id:
         raise HTTPException(status_code=400, detail="Admin heeft geen bedrijf")
+
+    # Build customer lookup table from cached customers
+    cust_result = await db.execute(
+        select(CrmRecord).where(CrmRecord.provider == "perfex", CrmRecord.resource == "customers")
+    )
+    customer_names: dict[str, str] = {}
+    for c in cust_result.scalars().all():
+        cp = c.payload or {}
+        cid = str(cp.get("userid") or c.external_id)
+        customer_names[cid] = cp.get("company") or f"Klant {cid}"
 
     cached = await db.execute(
         select(CrmRecord).where(CrmRecord.provider == "perfex", CrmRecord.resource == "invoices")
@@ -106,15 +116,40 @@ async def import_perfex_invoices(
 
     status_map = {"1": "verzonden", "2": "betaald", "3": "verzonden", "4": "verlopen", "5": "concept", "6": "concept"}
 
-    created, skipped = 0, 0
+    created, skipped, updated = 0, 0, 0
     for rec in records:
         p = rec.payload or {}
         ext_id = str(p.get("id") or rec.external_id)
+        client_id = str(p.get("clientid") or "")
+        client_name = customer_names.get(client_id, f"Klant {client_id}")
 
-        existing = await db.execute(
+        # Build proper lines from subtotal + tax
+        subtotal = _safe_float(p.get("subtotal"))
+        total_tax = _safe_float(p.get("total_tax"))
+        btw_rate = (total_tax / subtotal * 100) if subtotal > 0 else 21.0
+        # Round to nearest standard rate
+        if abs(btw_rate - 21) < 2:
+            btw_rate = 21
+        elif abs(btw_rate - 9) < 2:
+            btw_rate = 9
+        elif abs(btw_rate) < 1:
+            btw_rate = 0
+
+        client_note = p.get("clientnote") or ""
+        admin_note = p.get("adminnote") or ""
+        notes_parts = [n for n in [client_note, admin_note] if n and n.strip()]
+
+        existing_result = await db.execute(
             select(Invoice).where(Invoice.company_id == admin.company_id, Invoice.source == "perfex", Invoice.source_id == ext_id)
         )
-        if existing.scalar_one_or_none():
+        existing = existing_result.scalar_one_or_none()
+
+        if existing:
+            # Update existing with better data (resolve client names etc.)
+            if existing.client != client_name and client_name != f"Klant {client_id}":
+                existing.client = client_name
+                existing.client_id = client_id
+                updated += 1
             skipped += 1
             continue
 
@@ -122,20 +157,140 @@ async def import_perfex_invoices(
             id=uuid.uuid4(),
             company_id=admin.company_id,
             number=p.get("formatted_number") or p.get("number") or f"PFX-{ext_id}",
-            client=str(p.get("clientid") or "Onbekend"),
-            client_id=str(p.get("clientid") or ""),
+            client=client_name,
+            client_id=client_id,
             date=_safe_date(p.get("date")),
             due_date=_safe_date(p.get("duedate")),
             lines=[{
-                "desc": "Geïmporteerd uit Perfex CRM",
+                "desc": f"Factuur {p.get('formatted_number') or ext_id}",
                 "qty": 1,
-                "price": _safe_float(p.get("subtotal")),
-                "btwRate": _safe_float(p.get("total_tax")) / max(_safe_float(p.get("subtotal")), 0.01) * 100 if _safe_float(p.get("subtotal")) > 0 else 21,
+                "price": round(subtotal, 2),
+                "btwRate": btw_rate,
             }],
             status=status_map.get(str(p.get("status")), "concept"),
-            notes=f"Geïmporteerd uit Perfex CRM (ID: {ext_id})",
+            notes="\n".join(notes_parts) if notes_parts else None,
             source="perfex",
             source_id=ext_id,
+        )
+        db.add(inv)
+        created += 1
+
+    await db.flush()
+    return {"created": created, "skipped": skipped, "updated": updated, "total_cached": len(records)}
+
+
+@router.post("/perfex/estimates")
+async def import_perfex_estimates(
+    admin: User = Depends(_require_admin),
+    db: AsyncSession = Depends(get_db),
+):
+    """Import Perfex estimates as FiscaalFlow offertes (document_type='offerte')."""
+    if not admin.company_id:
+        raise HTTPException(status_code=400, detail="Admin heeft geen bedrijf")
+
+    # Customer lookup
+    cust_result = await db.execute(
+        select(CrmRecord).where(CrmRecord.provider == "perfex", CrmRecord.resource == "customers")
+    )
+    customer_names: dict[str, str] = {}
+    for c in cust_result.scalars().all():
+        cp = c.payload or {}
+        customer_names[str(cp.get("userid") or c.external_id)] = cp.get("company") or ""
+
+    cached = await db.execute(
+        select(CrmRecord).where(CrmRecord.provider == "perfex", CrmRecord.resource == "estimates")
+    )
+    records = cached.scalars().all()
+
+    created, skipped = 0, 0
+    for rec in records:
+        p = rec.payload or {}
+        ext_id = str(p.get("id") or rec.external_id)
+        client_id = str(p.get("clientid") or "")
+
+        existing = await db.execute(
+            select(Invoice).where(Invoice.company_id == admin.company_id, Invoice.source == "perfex", Invoice.source_id == f"est-{ext_id}")
+        )
+        if existing.scalar_one_or_none():
+            skipped += 1
+            continue
+
+        subtotal = _safe_float(p.get("subtotal"))
+        total_tax = _safe_float(p.get("total_tax"))
+        btw_rate = round((total_tax / subtotal * 100) if subtotal > 0 else 21)
+
+        inv = Invoice(
+            id=uuid.uuid4(),
+            company_id=admin.company_id,
+            document_type="offerte",
+            number=p.get("formatted_number") or f"OFT-PFX-{ext_id}",
+            client=customer_names.get(client_id, f"Klant {client_id}"),
+            client_id=client_id,
+            date=_safe_date(p.get("date")),
+            due_date=_safe_date(p.get("expirydate")),
+            lines=[{"desc": f"Offerte {ext_id}", "qty": 1, "price": round(subtotal, 2), "btwRate": btw_rate}],
+            status="concept",
+            source="perfex",
+            source_id=f"est-{ext_id}",
+        )
+        db.add(inv)
+        created += 1
+
+    await db.flush()
+    return {"created": created, "skipped": skipped, "total_cached": len(records)}
+
+
+@router.post("/perfex/credit-notes")
+async def import_perfex_credit_notes(
+    admin: User = Depends(_require_admin),
+    db: AsyncSession = Depends(get_db),
+):
+    """Import Perfex credit notes as FiscaalFlow creditnotas."""
+    if not admin.company_id:
+        raise HTTPException(status_code=400, detail="Admin heeft geen bedrijf")
+
+    cust_result = await db.execute(
+        select(CrmRecord).where(CrmRecord.provider == "perfex", CrmRecord.resource == "customers")
+    )
+    customer_names: dict[str, str] = {}
+    for c in cust_result.scalars().all():
+        cp = c.payload or {}
+        customer_names[str(cp.get("userid") or c.external_id)] = cp.get("company") or ""
+
+    cached = await db.execute(
+        select(CrmRecord).where(CrmRecord.provider == "perfex", CrmRecord.resource == "credit_notes")
+    )
+    records = cached.scalars().all()
+
+    created, skipped = 0, 0
+    for rec in records:
+        p = rec.payload or {}
+        ext_id = str(p.get("id") or rec.external_id)
+        client_id = str(p.get("clientid") or "")
+
+        existing = await db.execute(
+            select(Invoice).where(Invoice.company_id == admin.company_id, Invoice.source == "perfex", Invoice.source_id == f"cn-{ext_id}")
+        )
+        if existing.scalar_one_or_none():
+            skipped += 1
+            continue
+
+        subtotal = _safe_float(p.get("subtotal"))
+        total_tax = _safe_float(p.get("total_tax"))
+
+        inv = Invoice(
+            id=uuid.uuid4(),
+            company_id=admin.company_id,
+            document_type="creditnota",
+            number=p.get("formatted_number") or f"CN-PFX-{ext_id}",
+            client=customer_names.get(client_id, f"Klant {client_id}"),
+            client_id=client_id,
+            date=_safe_date(p.get("date")),
+            due_date=_safe_date(p.get("date")),
+            lines=[{"desc": f"Creditnota {ext_id}", "qty": 1, "price": -round(subtotal, 2), "btwRate": 21}],
+            status="concept",
+            source="perfex",
+            source_id=f"cn-{ext_id}",
         )
         db.add(inv)
         created += 1
@@ -149,10 +304,14 @@ async def import_perfex_all(
     admin: User = Depends(_require_admin),
     db: AsyncSession = Depends(get_db),
 ):
-    """Import all Perfex data (customers + invoices) into native tables."""
+    """Import ALL Perfex data: customers + invoices + estimates + credit notes."""
     customers = await import_perfex_customers(admin=admin, db=db)
     invoices = await import_perfex_invoices(admin=admin, db=db)
+    estimates = await import_perfex_estimates(admin=admin, db=db)
+    credit_notes = await import_perfex_credit_notes(admin=admin, db=db)
     return {
         "customers": customers,
         "invoices": invoices,
+        "estimates": estimates,
+        "credit_notes": credit_notes,
     }
