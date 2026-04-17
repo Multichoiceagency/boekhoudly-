@@ -10,7 +10,7 @@ from app.database import get_db
 from app.models.user import User
 from app.models.company import Company
 from app.schemas.user import (
-    UserCreate, UserLogin, UserResponse, Token,
+    UserLogin, UserResponse, Token,
     GoogleAuthRequest, OnboardingUpdate, OnboardingComplete
 )
 from app.utils.auth import get_password_hash, verify_password, create_access_token, get_current_user
@@ -26,34 +26,48 @@ _verification_codes: dict[str, dict] = {}
 
 
 @router.post("/register", response_model=Token, status_code=201)
-async def register(data: UserCreate, db: AsyncSession = Depends(get_db)):
+async def register(data: dict, db: AsyncSession = Depends(get_db)):
     """Registreer een nieuw account met e-mail en wachtwoord.
 
     Self-registration is standaard uitgeschakeld — nieuwe gebruikers moeten
     door een admin worden aangemaakt. Zet ALLOW_SELF_REGISTRATION=True in
     de omgeving om weer open te zetten.
     """
+    # Check self-registration BEFORE any validation to avoid leaking schema info
     if not getattr(settings, "ALLOW_SELF_REGISTRATION", False):
         raise HTTPException(
             status_code=403,
             detail="Zelf-registratie is uitgeschakeld. Neem contact op met info@fiscaalflow.nl om een account aan te vragen.",
         )
 
-    existing = await db.execute(select(User).where(User.email == data.email))
+    # Manual validation (moved after self-registration check)
+    email = (data.get("email") or "").strip()
+    password = data.get("password") or ""
+    full_name = (data.get("full_name") or "").strip()
+    company_name = (data.get("company_name") or "").strip() or None
+
+    if not email:
+        raise HTTPException(status_code=422, detail="E-mail is verplicht")
+    if not password:
+        raise HTTPException(status_code=422, detail="Wachtwoord is verplicht")
+    if not full_name:
+        raise HTTPException(status_code=422, detail="Volledige naam is verplicht")
+
+    existing = await db.execute(select(User).where(User.email == email))
     if existing.scalar_one_or_none():
         raise HTTPException(status_code=400, detail="E-mailadres is al in gebruik")
 
     company = None
-    if data.company_name:
-        company = Company(id=uuid.uuid4(), name=data.company_name)
+    if company_name:
+        company = Company(id=uuid.uuid4(), name=company_name)
         db.add(company)
         await db.flush()
 
     user = User(
         id=uuid.uuid4(),
-        email=data.email,
-        hashed_password=get_password_hash(data.password),
-        full_name=data.full_name,
+        email=email,
+        hashed_password=get_password_hash(password),
+        full_name=full_name,
         company_id=company.id if company else None,
         onboarding_completed=False,
         onboarding_step=0,

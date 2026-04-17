@@ -51,6 +51,11 @@ async def prefill_form(
         result = await db.execute(select(Company).where(Company.id == current_user.company_id))
         company = result.scalar_one_or_none()
 
+    # Fallback for admin / users without company_id: pick the first company in the system
+    if not company:
+        result = await db.execute(select(Company).limit(1))
+        company = result.scalar_one_or_none()
+
     return {
         "company_name": company.name if company else "",
         "kvk_number": company.kvk_number if company else "",
