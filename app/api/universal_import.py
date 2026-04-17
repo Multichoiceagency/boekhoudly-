@@ -73,8 +73,11 @@ def _guess_btw(subtotal: float, total: float) -> float:
 # ============================================================
 
 def _normalize_customer(provider: str, raw: dict) -> dict:
-    """Normalize a customer record from any provider to a common shape."""
+    """Normalize a customer record from any provider to a common shape.
+    Field names verified against official API documentation per provider."""
+
     if provider == "perfex":
+        # Themesic REST API: userid, company, vat, address, city
         return {
             "ext_id": str(raw.get("userid") or raw.get("id") or ""),
             "name": raw.get("company") or raw.get("name") or "",
@@ -82,8 +85,12 @@ def _normalize_customer(provider: str, raw: dict) -> dict:
             "address": raw.get("address") or raw.get("billing_street") or "",
             "city": (raw.get("city") or raw.get("billing_city") or "").strip(),
             "vat": raw.get("vat") or "",
+            "kvk": "",
+            "phone": raw.get("phonenumber") or "",
+            "zip": raw.get("zip") or "",
         }
     if provider == "moneybird":
+        # Moneybird v2: firstname (no underscore!), company_name, tax_number, address1, zipcode
         return {
             "ext_id": str(raw.get("id") or ""),
             "name": raw.get("company_name") or f"{raw.get('firstname', '')} {raw.get('lastname', '')}".strip(),
@@ -91,40 +98,116 @@ def _normalize_customer(provider: str, raw: dict) -> dict:
             "address": raw.get("address1") or "",
             "city": raw.get("city") or "",
             "vat": raw.get("tax_number") or "",
+            "kvk": raw.get("chamber_of_commerce") or "",
+            "phone": raw.get("phone") or "",
+            "zip": raw.get("zipcode") or "",
         }
     if provider == "wefact":
+        # WeFact: CompanyName, Initials, SurName, EmailAddress, Address, City, TaxNumber
         return {
             "ext_id": str(raw.get("Identifier") or raw.get("DebtorCode") or ""),
-            "name": raw.get("CompanyName") or raw.get("Initials", "") + " " + raw.get("SurName", ""),
+            "name": raw.get("CompanyName") or f"{raw.get('Initials', '')} {raw.get('SurName', '')}".strip(),
             "email": raw.get("EmailAddress") or "",
             "address": raw.get("Address") or "",
             "city": raw.get("City") or "",
             "vat": raw.get("TaxNumber") or "",
+            "kvk": raw.get("CocNumber") or "",
+            "phone": raw.get("PhoneNumber") or "",
+            "zip": raw.get("ZipCode") or "",
         }
-    if provider in ("shopify", "woocommerce", "magento", "medusa"):
-        billing = raw.get("billing") or raw.get("billing_address") or {}
+    if provider == "snelstart":
+        # SnelStart B2B: naam, email, vestigingsAdres {straat, postcode, plaats}
+        adres = raw.get("vestigingsAdres") or raw.get("correspondentieAdres") or {}
         return {
             "ext_id": str(raw.get("id") or ""),
-            "name": f"{raw.get('first_name', '') or billing.get('first_name', '')} {raw.get('last_name', '') or billing.get('last_name', '')}".strip() or raw.get("email") or "",
+            "name": raw.get("naam") or "",
             "email": raw.get("email") or "",
-            "address": billing.get("address1") or billing.get("address_1") or billing.get("street") or "",
+            "address": adres.get("straat") or "",
+            "city": adres.get("plaats") or "",
+            "vat": raw.get("btwNummer") or "",
+            "kvk": raw.get("kvkNummer") or "",
+            "phone": raw.get("telefoon") or "",
+            "zip": adres.get("postcode") or "",
+        }
+    if provider == "shopify":
+        # Shopify Admin 2024-01: first_name, last_name, email, addresses[]
+        addr = (raw.get("addresses") or [{}])[0] if raw.get("addresses") else (raw.get("default_address") or {})
+        return {
+            "ext_id": str(raw.get("id") or ""),
+            "name": f"{raw.get('first_name', '')} {raw.get('last_name', '')}".strip() or raw.get("email") or "",
+            "email": raw.get("email") or "",
+            "address": addr.get("address1") or "",
+            "city": addr.get("city") or "",
+            "vat": "",
+            "kvk": "",
+            "phone": raw.get("phone") or addr.get("phone") or "",
+            "zip": addr.get("zip") or "",
+        }
+    if provider == "woocommerce":
+        # WooCommerce v3: billing.first_name, billing.last_name, billing.address_1, billing.city
+        billing = raw.get("billing") or {}
+        return {
+            "ext_id": str(raw.get("id") or ""),
+            "name": f"{billing.get('first_name', '') or raw.get('first_name', '')} {billing.get('last_name', '') or raw.get('last_name', '')}".strip() or raw.get("email") or "",
+            "email": raw.get("email") or billing.get("email") or "",
+            "address": billing.get("address_1") or "",
             "city": billing.get("city") or "",
             "vat": "",
+            "kvk": "",
+            "phone": billing.get("phone") or "",
+            "zip": billing.get("postcode") or "",
+        }
+    if provider == "magento":
+        # Magento REST V1: firstname, lastname, email, addresses[].street[], city, postcode
+        addrs = raw.get("addresses") or []
+        addr = addrs[0] if addrs else {}
+        street = addr.get("street") or []
+        return {
+            "ext_id": str(raw.get("id") or raw.get("entity_id") or ""),
+            "name": f"{raw.get('firstname', '')} {raw.get('lastname', '')}".strip(),
+            "email": raw.get("email") or "",
+            "address": street[0] if isinstance(street, list) and street else str(street),
+            "city": addr.get("city") or "",
+            "vat": raw.get("taxvat") or "",
+            "kvk": "",
+            "phone": addr.get("telephone") or "",
+            "zip": addr.get("postcode") or "",
+        }
+    if provider == "medusa":
+        # Medusa Admin: first_name, last_name, email, shipping_addresses[]
+        addrs = raw.get("shipping_addresses") or []
+        addr = addrs[0] if addrs else {}
+        return {
+            "ext_id": str(raw.get("id") or ""),
+            "name": f"{raw.get('first_name', '')} {raw.get('last_name', '')}".strip() or raw.get("email") or "",
+            "email": raw.get("email") or "",
+            "address": addr.get("address_1") or "",
+            "city": addr.get("city") or "",
+            "vat": "",
+            "kvk": "",
+            "phone": addr.get("phone") or raw.get("phone") or "",
+            "zip": addr.get("postal_code") or "",
         }
     # Generic fallback
     return {
         "ext_id": str(raw.get("id") or ""),
-        "name": raw.get("name") or raw.get("company") or raw.get("email") or "",
+        "name": raw.get("name") or raw.get("company") or raw.get("company_name") or raw.get("email") or "",
         "email": raw.get("email") or "",
-        "address": raw.get("address") or "",
+        "address": raw.get("address") or raw.get("address1") or "",
         "city": raw.get("city") or "",
         "vat": raw.get("vat") or raw.get("tax_number") or "",
+        "kvk": "",
+        "phone": raw.get("phone") or "",
+        "zip": raw.get("zipcode") or raw.get("zip") or raw.get("postcode") or "",
     }
 
 
 def _normalize_invoice(provider: str, raw: dict, customer_names: dict) -> dict:
-    """Normalize an invoice/order from any provider to a common shape."""
+    """Normalize an invoice/order from any provider to a common shape.
+    Field names verified against official API documentation per provider."""
+
     if provider == "perfex":
+        # Themesic REST API: clientid, formatted_number, subtotal, total_tax, status (1-6)
         client_id = str(raw.get("clientid") or "")
         subtotal = _safe_float(raw.get("subtotal"))
         total_tax = _safe_float(raw.get("total_tax"))
@@ -137,23 +220,28 @@ def _normalize_invoice(provider: str, raw: dict, customer_names: dict) -> dict:
             "due_date": raw.get("duedate"),
             "subtotal": subtotal,
             "btw_rate": _guess_btw(subtotal, subtotal + total_tax),
-            "status": {"1": "verzonden", "2": "betaald", "3": "verzonden", "4": "verlopen", "5": "concept"}.get(str(raw.get("status")), "concept"),
+            "status": {"1": "verzonden", "2": "betaald", "3": "verzonden", "4": "verlopen", "5": "concept", "6": "concept"}.get(str(raw.get("status")), "concept"),
             "notes": raw.get("clientnote") or raw.get("adminnote") or "",
         }
     if provider == "moneybird":
+        # Moneybird v2: invoice_id (display nr), state, total_price_excl_tax, invoice_date, due_date
+        # States: draft, scheduled, open, pending_payment, reminded, late, paid, uncollectible
+        contact = raw.get("contact") or {}
+        contact_id = str(raw.get("contact_id") or "")
         return {
             "ext_id": str(raw.get("id") or ""),
             "number": raw.get("invoice_id") or "",
-            "client": raw.get("contact", {}).get("company_name") or customer_names.get(str(raw.get("contact_id")), ""),
-            "client_id": str(raw.get("contact_id") or ""),
+            "client": contact.get("company_name") or f"{contact.get('firstname', '')} {contact.get('lastname', '')}".strip() or customer_names.get(contact_id, ""),
+            "client_id": contact_id,
             "date": raw.get("invoice_date"),
             "due_date": raw.get("due_date"),
             "subtotal": _safe_float(raw.get("total_price_excl_tax")),
-            "btw_rate": 21,
-            "status": {"open": "verzonden", "late": "verlopen", "paid": "betaald", "draft": "concept"}.get(raw.get("state", ""), "concept"),
+            "btw_rate": _guess_btw(_safe_float(raw.get("total_price_excl_tax")), _safe_float(raw.get("total_price_incl_tax"))),
+            "status": {"open": "verzonden", "reminded": "verzonden", "pending_payment": "verzonden", "late": "verlopen", "paid": "betaald", "draft": "concept", "scheduled": "concept", "uncollectible": "verlopen"}.get(raw.get("state", ""), "concept"),
             "notes": raw.get("reference") or "",
         }
     if provider == "wefact":
+        # WeFact: InvoiceCode, Date, DueDate, AmountExcl, AmountIncl, Status, DebtorCode
         return {
             "ext_id": str(raw.get("Identifier") or raw.get("InvoiceCode") or ""),
             "number": raw.get("InvoiceCode") or "",
@@ -164,46 +252,106 @@ def _normalize_invoice(provider: str, raw: dict, customer_names: dict) -> dict:
             "subtotal": _safe_float(raw.get("AmountExcl")),
             "btw_rate": _guess_btw(_safe_float(raw.get("AmountExcl")), _safe_float(raw.get("AmountIncl"))),
             "status": {"0": "concept", "1": "verzonden", "2": "betaald", "3": "verlopen"}.get(str(raw.get("Status")), "concept"),
-            "notes": "",
+            "notes": raw.get("Remark") or "",
         }
-    if provider in ("shopify", "woocommerce"):
+    if provider == "snelstart":
+        # SnelStart B2B: factuurnummer, factuurdatum, vervalDatum, factuurbedrag, openstaandSaldo
         return {
             "ext_id": str(raw.get("id") or ""),
-            "number": str(raw.get("order_number") or raw.get("number") or raw.get("name") or ""),
-            "client": f"{raw.get('billing', {}).get('first_name', '')} {raw.get('billing', {}).get('last_name', '')}".strip() or raw.get("email") or "",
-            "client_id": str(raw.get("customer_id") or raw.get("customer", {}).get("id") or ""),
-            "date": (raw.get("created_at") or raw.get("date_created") or "")[:10],
+            "number": raw.get("factuurnummer") or "",
+            "client": customer_names.get(str(raw.get("relatie", {}).get("id")), raw.get("relatie", {}).get("naam") or ""),
+            "client_id": str(raw.get("relatie", {}).get("id") or ""),
+            "date": (raw.get("factuurdatum") or "")[:10],
+            "due_date": (raw.get("vervalDatum") or "")[:10],
+            "subtotal": _safe_float(raw.get("factuurbedrag")),
+            "btw_rate": 21,
+            "status": "betaald" if _safe_float(raw.get("openstaandSaldo")) == 0 else "verzonden",
+            "notes": raw.get("omschrijving") or "",
+        }
+    if provider == "shopify":
+        # Shopify Admin 2024-01: name (#1001), order_number (1001), total_price, subtotal_price,
+        # total_tax, financial_status, billing_address, customer
+        billing = raw.get("billing_address") or {}
+        customer = raw.get("customer") or {}
+        subtotal = _safe_float(raw.get("subtotal_price") or raw.get("total_price"))
+        total_tax = _safe_float(raw.get("total_tax"))
+        return {
+            "ext_id": str(raw.get("id") or ""),
+            "number": raw.get("name") or str(raw.get("order_number") or ""),
+            "client": f"{billing.get('first_name', '') or customer.get('first_name', '')} {billing.get('last_name', '') or customer.get('last_name', '')}".strip() or raw.get("email") or "",
+            "client_id": str(customer.get("id") or ""),
+            "date": (raw.get("created_at") or "")[:10],
             "due_date": None,
-            "subtotal": _safe_float(raw.get("total") or raw.get("total_price")),
-            "btw_rate": _safe_float(raw.get("total_tax", 0)) / max(_safe_float(raw.get("total") or raw.get("total_price") or 1), 0.01) * 100,
-            "status": {"paid": "betaald", "completed": "betaald", "processing": "verzonden", "pending": "concept", "refunded": "concept"}.get(raw.get("status") or raw.get("financial_status", ""), "concept"),
+            "subtotal": subtotal,
+            "btw_rate": _guess_btw(subtotal, subtotal + total_tax) if subtotal > 0 else 21,
+            "status": {"paid": "betaald", "partially_paid": "verzonden", "pending": "concept", "refunded": "concept", "voided": "concept", "authorized": "verzonden"}.get(raw.get("financial_status", ""), "concept"),
             "notes": raw.get("note") or "",
         }
-    if provider in ("magento", "medusa"):
+    if provider == "woocommerce":
+        # WooCommerce v3: number, status, total, total_tax, date_created, billing, customer_id
+        # Statuses: pending, processing, on-hold, completed, cancelled, refunded, failed
+        billing = raw.get("billing") or {}
+        subtotal = _safe_float(raw.get("total"))
+        total_tax = _safe_float(raw.get("total_tax"))
+        return {
+            "ext_id": str(raw.get("id") or ""),
+            "number": raw.get("number") or str(raw.get("id") or ""),
+            "client": f"{billing.get('first_name', '')} {billing.get('last_name', '')}".strip() or raw.get("email") or billing.get("email") or "",
+            "client_id": str(raw.get("customer_id") or ""),
+            "date": (raw.get("date_created") or raw.get("date_created_gmt") or "")[:10],
+            "due_date": None,
+            "subtotal": subtotal,
+            "btw_rate": _guess_btw(subtotal - total_tax, subtotal) if total_tax > 0 else 21,
+            "status": {"completed": "betaald", "processing": "verzonden", "on-hold": "verzonden", "pending": "concept", "cancelled": "concept", "refunded": "concept", "failed": "concept"}.get(raw.get("status", ""), "concept"),
+            "notes": raw.get("customer_note") or "",
+        }
+    if provider == "magento":
+        # Magento REST V1: entity_id, increment_id, grand_total, subtotal, tax_amount,
+        # state (1=open, 2=paid, 3=cancelled), created_at
         return {
             "ext_id": str(raw.get("entity_id") or raw.get("id") or ""),
-            "number": str(raw.get("increment_id") or raw.get("display_id") or ""),
-            "client": raw.get("customer_firstname", "") + " " + raw.get("customer_lastname", "") if raw.get("customer_firstname") else customer_names.get(str(raw.get("customer_id")), ""),
+            "number": raw.get("increment_id") or "",
+            "client": f"{raw.get('customer_firstname', '')} {raw.get('customer_lastname', '')}".strip() or customer_names.get(str(raw.get("customer_id")), ""),
             "client_id": str(raw.get("customer_id") or ""),
             "date": (raw.get("created_at") or "")[:10],
             "due_date": None,
-            "subtotal": _safe_float(raw.get("grand_total") or raw.get("total")),
-            "btw_rate": 21,
-            "status": "betaald" if raw.get("status") in ("complete", "captured") else "concept",
+            "subtotal": _safe_float(raw.get("grand_total") or raw.get("subtotal")),
+            "btw_rate": _guess_btw(_safe_float(raw.get("subtotal")), _safe_float(raw.get("grand_total"))) if _safe_float(raw.get("subtotal")) > 0 else 21,
+            "status": {1: "verzonden", 2: "betaald", 3: "concept"}.get(raw.get("state"), "concept"),
             "notes": "",
         }
-    # Generic fallback
+    if provider == "medusa":
+        # Medusa Admin: display_id, total (in CENTS!), subtotal, tax_total,
+        # status, payment_status, customer_id
+        # Money is in smallest unit (cents) — divide by 100
+        total_cents = raw.get("total") or 0
+        subtotal_cents = raw.get("subtotal") or total_cents
+        tax_cents = raw.get("tax_total") or 0
+        customer = raw.get("customer") or {}
+        return {
+            "ext_id": str(raw.get("id") or ""),
+            "number": str(raw.get("display_id") or ""),
+            "client": f"{customer.get('first_name', '')} {customer.get('last_name', '')}".strip() or raw.get("email") or customer_names.get(str(raw.get("customer_id")), ""),
+            "client_id": str(raw.get("customer_id") or ""),
+            "date": (raw.get("created_at") or "")[:10],
+            "due_date": None,
+            "subtotal": subtotal_cents / 100,
+            "btw_rate": _guess_btw(subtotal_cents / 100, (subtotal_cents + tax_cents) / 100) if subtotal_cents > 0 else 21,
+            "status": {"captured": "betaald", "not_paid": "concept", "awaiting": "verzonden", "refunded": "concept"}.get(raw.get("payment_status", ""), {"completed": "betaald", "pending": "concept", "archived": "betaald"}.get(raw.get("status", ""), "concept")),
+            "notes": "",
+        }
+    # Generic fallback for unknown providers
     return {
         "ext_id": str(raw.get("id") or ""),
-        "number": str(raw.get("number") or raw.get("invoice_number") or ""),
-        "client": raw.get("name") or raw.get("customer_name") or "",
-        "client_id": str(raw.get("customer_id") or ""),
-        "date": raw.get("date") or raw.get("created_at"),
+        "number": str(raw.get("number") or raw.get("invoice_number") or raw.get("invoice_id") or ""),
+        "client": raw.get("name") or raw.get("customer_name") or raw.get("company_name") or "",
+        "client_id": str(raw.get("customer_id") or raw.get("contact_id") or ""),
+        "date": raw.get("date") or raw.get("created_at") or raw.get("invoice_date"),
         "due_date": raw.get("due_date"),
-        "subtotal": _safe_float(raw.get("total") or raw.get("amount")),
+        "subtotal": _safe_float(raw.get("total") or raw.get("amount") or raw.get("grand_total")),
         "btw_rate": 21,
         "status": "concept",
-        "notes": "",
+        "notes": raw.get("notes") or raw.get("note") or raw.get("reference") or "",
     }
 
 
