@@ -17,6 +17,7 @@ from app.models.company_subscription import CompanySubscription
 from app.models.ai_usage import AiUsage
 from app.models.integration_connection import IntegrationConnection
 from app.models.crm_cache import CrmRecord, CrmSyncRun
+from app.models.product import Product
 
 __all__ = [
     "User", "Company", "Transaction", "Document", "LedgerEntry",

@@ -22,6 +22,8 @@ class Invoice(Base):
     notes: Mapped[str | None] = mapped_column(Text, nullable=True)
     source: Mapped[str] = mapped_column(String(50), default="manual")
     source_id: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    document_type: Mapped[str] = mapped_column(String(20), default="factuur")  # factuur, offerte, creditnota
+    related_invoice_id: Mapped[str | None] = mapped_column(String(100), nullable=True)  # for credit notes: links to original invoice
 
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)

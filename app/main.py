@@ -34,6 +34,8 @@ async def lifespan(app: FastAPI):
         "ALTER TABLE creditors ADD COLUMN IF NOT EXISTS source_id VARCHAR(255)",
         "ALTER TABLE expenses ADD COLUMN IF NOT EXISTS source VARCHAR(50) DEFAULT 'manual'",
         "ALTER TABLE expenses ADD COLUMN IF NOT EXISTS source_id VARCHAR(255)",
+        "ALTER TABLE invoices ADD COLUMN IF NOT EXISTS document_type VARCHAR(20) DEFAULT 'factuur'",
+        "ALTER TABLE invoices ADD COLUMN IF NOT EXISTS related_invoice_id VARCHAR(100)",
     ]
     async with engine.begin() as conn:
         for sql in migrations:

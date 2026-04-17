@@ -15,6 +15,7 @@ from app.models.expense import Expense
 from app.models.debtor import Debtor
 from app.models.creditor import Creditor
 from app.models.bank_transaction import BankTransaction
+from app.models.product import Product
 from app.utils.auth import get_current_user
 
 router = APIRouter(prefix="/workspace", tags=["Workspace"])
@@ -234,6 +235,8 @@ def _inv_to_dict(i: Invoice) -> dict:
         "notes": i.notes or "",
         "source": getattr(i, 'source', 'manual') or 'manual',
         "sourceId": getattr(i, 'source_id', None),
+        "documentType": getattr(i, 'document_type', 'factuur') or 'factuur',
+        "relatedInvoiceId": getattr(i, 'related_invoice_id', None),
     }
 
 
@@ -462,3 +465,177 @@ def _parse_date(val) -> date | None:
         return date.fromisoformat(str(val)[:10])
     except (ValueError, TypeError):
         return None
+
+
+# ============================================================
+#  OFFERTES (quotes) — document_type='offerte'
+# ============================================================
+@router.get("/offertes")
+async def list_offertes(user: User = Depends(get_current_user), db: AsyncSession = Depends(get_db)):
+    cid = _company_id(user)
+    q = select(Invoice).where(Invoice.document_type == "offerte").order_by(Invoice.date.desc())
+    if cid:
+        q = q.where(Invoice.company_id == cid)
+    return [_inv_to_dict(i) for i in (await db.execute(q)).scalars().all()]
+
+
+@router.post("/offertes", status_code=201)
+async def create_offerte(data: dict, user: User = Depends(get_current_user), db: AsyncSession = Depends(get_db)):
+    cid = _company_id(user)
+    if not cid:
+        raise HTTPException(status_code=400, detail="Geen bedrijf gekoppeld")
+    inv = Invoice(
+        id=uuid.uuid4(), company_id=cid, document_type="offerte",
+        number=data.get("number", ""), client=data.get("client", ""),
+        client_id=data.get("clientId"), date=_parse_date(data.get("date")) or date.today(),
+        due_date=_parse_date(data.get("dueDate")) or date.today(),
+        lines=data.get("lines", []), status=data.get("status", "concept"),
+        notes=data.get("notes"),
+    )
+    db.add(inv)
+    await db.flush()
+    return _inv_to_dict(inv)
+
+
+@router.post("/offertes/{offerte_id}/convert-to-invoice")
+async def convert_offerte_to_invoice(offerte_id: str, user: User = Depends(get_current_user), db: AsyncSession = Depends(get_db)):
+    """Convert an offerte to a factuur. Creates a new invoice with the same lines."""
+    result = await db.execute(select(Invoice).where(Invoice.id == offerte_id))
+    offerte = result.scalar_one_or_none()
+    if not offerte or offerte.document_type != "offerte":
+        raise HTTPException(status_code=404, detail="Offerte niet gevonden")
+
+    # Mark offerte as converted
+    offerte.status = "omgezet"
+
+    # Create the invoice
+    inv = Invoice(
+        id=uuid.uuid4(), company_id=offerte.company_id, document_type="factuur",
+        number="",
+        client=offerte.client, client_id=offerte.client_id,
+        date=date.today(), due_date=date.today(),
+        lines=offerte.lines, status="concept",
+        notes=f"Omgezet vanuit offerte {offerte.number}",
+        related_invoice_id=str(offerte.id),
+    )
+    db.add(inv)
+    await db.flush()
+    return _inv_to_dict(inv)
+
+
+# ============================================================
+#  CREDITNOTA'S — document_type='creditnota'
+# ============================================================
+@router.get("/creditnotas")
+async def list_creditnotas(user: User = Depends(get_current_user), db: AsyncSession = Depends(get_db)):
+    cid = _company_id(user)
+    q = select(Invoice).where(Invoice.document_type == "creditnota").order_by(Invoice.date.desc())
+    if cid:
+        q = q.where(Invoice.company_id == cid)
+    return [_inv_to_dict(i) for i in (await db.execute(q)).scalars().all()]
+
+
+@router.post("/creditnotas", status_code=201)
+async def create_creditnota(data: dict, user: User = Depends(get_current_user), db: AsyncSession = Depends(get_db)):
+    cid = _company_id(user)
+    if not cid:
+        raise HTTPException(status_code=400, detail="Geen bedrijf gekoppeld")
+    cn = Invoice(
+        id=uuid.uuid4(), company_id=cid, document_type="creditnota",
+        number=data.get("number", ""), client=data.get("client", ""),
+        client_id=data.get("clientId"), date=_parse_date(data.get("date")) or date.today(),
+        due_date=_parse_date(data.get("dueDate")) or date.today(),
+        lines=data.get("lines", []), status=data.get("status", "concept"),
+        notes=data.get("notes"),
+        related_invoice_id=data.get("relatedInvoiceId"),
+    )
+    db.add(cn)
+    await db.flush()
+    return _inv_to_dict(cn)
+
+
+@router.post("/creditnotas/from-invoice/{invoice_id}")
+async def create_creditnota_from_invoice(invoice_id: str, user: User = Depends(get_current_user), db: AsyncSession = Depends(get_db)):
+    """Create a credit note that reverses a specific invoice."""
+    result = await db.execute(select(Invoice).where(Invoice.id == invoice_id))
+    orig = result.scalar_one_or_none()
+    if not orig:
+        raise HTTPException(status_code=404, detail="Factuur niet gevonden")
+
+    # Negate amounts
+    neg_lines = [
+        {**l, "price": -abs(l.get("price", 0))}
+        for l in (orig.lines or [])
+    ]
+    cn = Invoice(
+        id=uuid.uuid4(), company_id=orig.company_id, document_type="creditnota",
+        number="", client=orig.client, client_id=orig.client_id,
+        date=date.today(), due_date=date.today(),
+        lines=neg_lines, status="concept",
+        notes=f"Creditnota voor factuur {orig.number}",
+        related_invoice_id=str(orig.id),
+    )
+    db.add(cn)
+    await db.flush()
+    return _inv_to_dict(cn)
+
+
+# ============================================================
+#  PRODUCTEN (catalog)
+# ============================================================
+@router.get("/producten")
+async def list_producten(user: User = Depends(get_current_user), db: AsyncSession = Depends(get_db)):
+    cid = _company_id(user)
+    q = select(Product).order_by(Product.sort_order, Product.name)
+    if cid:
+        q = q.where(Product.company_id == cid)
+    return [_prod_to_dict(p) for p in (await db.execute(q)).scalars().all()]
+
+
+@router.post("/producten", status_code=201)
+async def create_product(data: dict, user: User = Depends(get_current_user), db: AsyncSession = Depends(get_db)):
+    cid = _company_id(user)
+    if not cid:
+        raise HTTPException(status_code=400, detail="Geen bedrijf gekoppeld")
+    p = Product(
+        id=uuid.uuid4(), company_id=cid,
+        name=data.get("name", ""), description=data.get("description"),
+        price=float(data.get("price", 0)), btw_rate=float(data.get("btwRate", 21)),
+        unit=data.get("unit", "stuk"), sku=data.get("sku"),
+        category=data.get("category"), is_active=data.get("isActive", True),
+    )
+    db.add(p)
+    await db.flush()
+    return _prod_to_dict(p)
+
+
+@router.put("/producten/{product_id}")
+async def update_product(product_id: str, data: dict, user: User = Depends(get_current_user), db: AsyncSession = Depends(get_db)):
+    result = await db.execute(select(Product).where(Product.id == product_id))
+    p = result.scalar_one_or_none()
+    if not p:
+        raise HTTPException(status_code=404, detail="Product niet gevonden")
+    mapping = {"btwRate": "btw_rate", "isActive": "is_active", "sortOrder": "sort_order"}
+    for k, v in data.items():
+        col = mapping.get(k, k)
+        if col == "price":
+            v = float(v)
+        if hasattr(p, col):
+            setattr(p, col, v)
+    await db.flush()
+    return _prod_to_dict(p)
+
+
+@router.delete("/producten/{product_id}")
+async def delete_product(product_id: str, user: User = Depends(get_current_user), db: AsyncSession = Depends(get_db)):
+    await db.execute(delete(Product).where(Product.id == product_id))
+    return {"ok": True}
+
+
+def _prod_to_dict(p: Product) -> dict:
+    return {
+        "id": str(p.id), "name": p.name, "description": p.description or "",
+        "price": float(p.price), "btwRate": float(p.btw_rate),
+        "unit": p.unit, "sku": p.sku or "", "category": p.category or "",
+        "isActive": p.is_active, "sortOrder": p.sort_order,
+    }
