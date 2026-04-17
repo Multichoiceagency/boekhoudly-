@@ -211,6 +211,16 @@ def _normalize_invoice(provider: str, raw: dict, customer_names: dict) -> dict:
         client_id = str(raw.get("clientid") or "")
         subtotal = _safe_float(raw.get("subtotal"))
         total_tax = _safe_float(raw.get("total_tax"))
+        btw_rate = _guess_btw(subtotal, subtotal + total_tax)
+        # Extract line items from Perfex items array
+        lines = []
+        for item in (raw.get("items") or []):
+            lines.append({
+                "desc": item.get("description") or "",
+                "qty": _safe_float(item.get("qty") or 1),
+                "price": _safe_float(item.get("rate")),
+                "btwRate": _safe_float(item.get("taxrate")) if item.get("taxrate") else btw_rate,
+            })
         return {
             "ext_id": str(raw.get("id") or ""),
             "number": raw.get("formatted_number") or raw.get("number") or "",
@@ -219,15 +229,26 @@ def _normalize_invoice(provider: str, raw: dict, customer_names: dict) -> dict:
             "date": raw.get("date"),
             "due_date": raw.get("duedate"),
             "subtotal": subtotal,
-            "btw_rate": _guess_btw(subtotal, subtotal + total_tax),
+            "btw_rate": btw_rate,
             "status": {"1": "verzonden", "2": "betaald", "3": "verzonden", "4": "verlopen", "5": "concept", "6": "concept"}.get(str(raw.get("status")), "concept"),
             "notes": raw.get("clientnote") or raw.get("adminnote") or "",
+            "lines": lines,
         }
     if provider == "moneybird":
         # Moneybird v2: invoice_id (display nr), state, total_price_excl_tax, invoice_date, due_date
         # States: draft, scheduled, open, pending_payment, reminded, late, paid, uncollectible
         contact = raw.get("contact") or {}
         contact_id = str(raw.get("contact_id") or "")
+        btw_rate = _guess_btw(_safe_float(raw.get("total_price_excl_tax")), _safe_float(raw.get("total_price_incl_tax")))
+        # Extract line items from Moneybird details array
+        lines = []
+        for detail in (raw.get("details") or []):
+            lines.append({
+                "desc": detail.get("description") or "",
+                "qty": _safe_float(detail.get("amount_decimal") or detail.get("amount") or 1),
+                "price": _safe_float(detail.get("price")),
+                "btwRate": _safe_float(detail.get("tax_rate_id")) if detail.get("tax_rate_id") else btw_rate,
+            })
         return {
             "ext_id": str(raw.get("id") or ""),
             "number": raw.get("invoice_id") or "",
@@ -236,12 +257,23 @@ def _normalize_invoice(provider: str, raw: dict, customer_names: dict) -> dict:
             "date": raw.get("invoice_date"),
             "due_date": raw.get("due_date"),
             "subtotal": _safe_float(raw.get("total_price_excl_tax")),
-            "btw_rate": _guess_btw(_safe_float(raw.get("total_price_excl_tax")), _safe_float(raw.get("total_price_incl_tax"))),
+            "btw_rate": btw_rate,
             "status": {"open": "verzonden", "reminded": "verzonden", "pending_payment": "verzonden", "late": "verlopen", "paid": "betaald", "draft": "concept", "scheduled": "concept", "uncollectible": "verlopen"}.get(raw.get("state", ""), "concept"),
             "notes": raw.get("reference") or "",
+            "lines": lines,
         }
     if provider == "wefact":
         # WeFact: InvoiceCode, Date, DueDate, AmountExcl, AmountIncl, Status, DebtorCode
+        btw_rate = _guess_btw(_safe_float(raw.get("AmountExcl")), _safe_float(raw.get("AmountIncl")))
+        # Extract line items from WeFact InvoiceLines array
+        lines = []
+        for line in (raw.get("InvoiceLines") or []):
+            lines.append({
+                "desc": line.get("Description") or "",
+                "qty": _safe_float(line.get("Number") or 1),
+                "price": _safe_float(line.get("PriceExcl")),
+                "btwRate": _safe_float(line.get("TaxPercentage")) if line.get("TaxPercentage") else btw_rate,
+            })
         return {
             "ext_id": str(raw.get("Identifier") or raw.get("InvoiceCode") or ""),
             "number": raw.get("InvoiceCode") or "",
@@ -250,12 +282,22 @@ def _normalize_invoice(provider: str, raw: dict, customer_names: dict) -> dict:
             "date": raw.get("Date"),
             "due_date": raw.get("DueDate"),
             "subtotal": _safe_float(raw.get("AmountExcl")),
-            "btw_rate": _guess_btw(_safe_float(raw.get("AmountExcl")), _safe_float(raw.get("AmountIncl"))),
+            "btw_rate": btw_rate,
             "status": {"0": "concept", "1": "verzonden", "2": "betaald", "3": "verlopen"}.get(str(raw.get("Status")), "concept"),
             "notes": raw.get("Remark") or "",
+            "lines": lines,
         }
     if provider == "snelstart":
         # SnelStart B2B: factuurnummer, factuurdatum, vervalDatum, factuurbedrag, openstaandSaldo
+        # Extract line items from SnelStart boekingsregels array
+        lines = []
+        for regel in (raw.get("boekingsregels") or []):
+            lines.append({
+                "desc": regel.get("omschrijving") or "",
+                "qty": 1,
+                "price": _safe_float(regel.get("bedrag")),
+                "btwRate": 21,
+            })
         return {
             "ext_id": str(raw.get("id") or ""),
             "number": raw.get("factuurnummer") or "",
@@ -267,6 +309,7 @@ def _normalize_invoice(provider: str, raw: dict, customer_names: dict) -> dict:
             "btw_rate": 21,
             "status": "betaald" if _safe_float(raw.get("openstaandSaldo")) == 0 else "verzonden",
             "notes": raw.get("omschrijving") or "",
+            "lines": lines,
         }
     if provider == "shopify":
         # Shopify Admin 2024-01: name (#1001), order_number (1001), total_price, subtotal_price,
@@ -275,6 +318,20 @@ def _normalize_invoice(provider: str, raw: dict, customer_names: dict) -> dict:
         customer = raw.get("customer") or {}
         subtotal = _safe_float(raw.get("subtotal_price") or raw.get("total_price"))
         total_tax = _safe_float(raw.get("total_tax"))
+        btw_rate = _guess_btw(subtotal, subtotal + total_tax) if subtotal > 0 else 21
+        # Extract line items from Shopify line_items array
+        lines = []
+        for item in (raw.get("line_items") or []):
+            item_tax_rate = btw_rate
+            tax_lines = item.get("tax_lines") or []
+            if tax_lines:
+                item_tax_rate = round(_safe_float(tax_lines[0].get("rate")) * 100, 1)
+            lines.append({
+                "desc": item.get("name") or item.get("title") or "",
+                "qty": _safe_float(item.get("quantity") or 1),
+                "price": _safe_float(item.get("price")),
+                "btwRate": item_tax_rate,
+            })
         return {
             "ext_id": str(raw.get("id") or ""),
             "number": raw.get("name") or str(raw.get("order_number") or ""),
@@ -283,9 +340,10 @@ def _normalize_invoice(provider: str, raw: dict, customer_names: dict) -> dict:
             "date": (raw.get("created_at") or "")[:10],
             "due_date": None,
             "subtotal": subtotal,
-            "btw_rate": _guess_btw(subtotal, subtotal + total_tax) if subtotal > 0 else 21,
+            "btw_rate": btw_rate,
             "status": {"paid": "betaald", "partially_paid": "verzonden", "pending": "concept", "refunded": "concept", "voided": "concept", "authorized": "verzonden"}.get(raw.get("financial_status", ""), "concept"),
             "notes": raw.get("note") or "",
+            "lines": lines,
         }
     if provider == "woocommerce":
         # WooCommerce v3: number, status, total, total_tax, date_created, billing, customer_id
@@ -293,6 +351,22 @@ def _normalize_invoice(provider: str, raw: dict, customer_names: dict) -> dict:
         billing = raw.get("billing") or {}
         subtotal = _safe_float(raw.get("total"))
         total_tax = _safe_float(raw.get("total_tax"))
+        btw_rate = _guess_btw(subtotal - total_tax, subtotal) if total_tax > 0 else 21
+        # Extract line items from WooCommerce line_items array
+        # WooCommerce: total = line total (excl tax), total_tax = tax for the line
+        lines = []
+        for item in (raw.get("line_items") or []):
+            line_total = _safe_float(item.get("total"))
+            line_tax = _safe_float(item.get("total_tax"))
+            qty = _safe_float(item.get("quantity") or 1)
+            unit_price = round(line_total / qty, 2) if qty else line_total
+            item_btw = _guess_btw(line_total, line_total + line_tax) if line_total > 0 and line_tax > 0 else btw_rate
+            lines.append({
+                "desc": item.get("name") or "",
+                "qty": qty,
+                "price": unit_price,
+                "btwRate": item_btw,
+            })
         return {
             "ext_id": str(raw.get("id") or ""),
             "number": raw.get("number") or str(raw.get("id") or ""),
@@ -301,13 +375,24 @@ def _normalize_invoice(provider: str, raw: dict, customer_names: dict) -> dict:
             "date": (raw.get("date_created") or raw.get("date_created_gmt") or "")[:10],
             "due_date": None,
             "subtotal": subtotal,
-            "btw_rate": _guess_btw(subtotal - total_tax, subtotal) if total_tax > 0 else 21,
+            "btw_rate": btw_rate,
             "status": {"completed": "betaald", "processing": "verzonden", "on-hold": "verzonden", "pending": "concept", "cancelled": "concept", "refunded": "concept", "failed": "concept"}.get(raw.get("status", ""), "concept"),
             "notes": raw.get("customer_note") or "",
+            "lines": lines,
         }
     if provider == "magento":
         # Magento REST V1: entity_id, increment_id, grand_total, subtotal, tax_amount,
         # state (1=open, 2=paid, 3=cancelled), created_at
+        btw_rate = _guess_btw(_safe_float(raw.get("subtotal")), _safe_float(raw.get("grand_total"))) if _safe_float(raw.get("subtotal")) > 0 else 21
+        # Extract line items from Magento items array
+        lines = []
+        for item in (raw.get("items") or []):
+            lines.append({
+                "desc": item.get("name") or item.get("sku") or "",
+                "qty": _safe_float(item.get("qty") or item.get("qty_ordered") or 1),
+                "price": _safe_float(item.get("price") or item.get("base_price")),
+                "btwRate": btw_rate,
+            })
         return {
             "ext_id": str(raw.get("entity_id") or raw.get("id") or ""),
             "number": raw.get("increment_id") or "",
@@ -316,9 +401,10 @@ def _normalize_invoice(provider: str, raw: dict, customer_names: dict) -> dict:
             "date": (raw.get("created_at") or "")[:10],
             "due_date": None,
             "subtotal": _safe_float(raw.get("grand_total") or raw.get("subtotal")),
-            "btw_rate": _guess_btw(_safe_float(raw.get("subtotal")), _safe_float(raw.get("grand_total"))) if _safe_float(raw.get("subtotal")) > 0 else 21,
+            "btw_rate": btw_rate,
             "status": {1: "verzonden", 2: "betaald", 3: "concept"}.get(raw.get("state"), "concept"),
             "notes": "",
+            "lines": lines,
         }
     if provider == "medusa":
         # Medusa Admin: display_id, total (in CENTS!), subtotal, tax_total,
@@ -328,6 +414,19 @@ def _normalize_invoice(provider: str, raw: dict, customer_names: dict) -> dict:
         subtotal_cents = raw.get("subtotal") or total_cents
         tax_cents = raw.get("tax_total") or 0
         customer = raw.get("customer") or {}
+        btw_rate = _guess_btw(subtotal_cents / 100, (subtotal_cents + tax_cents) / 100) if subtotal_cents > 0 else 21
+        # Extract line items from Medusa items array (prices in cents!)
+        lines = []
+        for item in (raw.get("items") or []):
+            item_tax = _safe_float(item.get("tax_total") or 0) / 100
+            unit_price = _safe_float(item.get("unit_price") or 0) / 100
+            item_btw = _guess_btw(unit_price, unit_price + (item_tax / _safe_float(item.get("quantity") or 1))) if unit_price > 0 and item_tax > 0 else btw_rate
+            lines.append({
+                "desc": item.get("title") or item.get("description") or "",
+                "qty": _safe_float(item.get("quantity") or 1),
+                "price": unit_price,
+                "btwRate": item_btw,
+            })
         return {
             "ext_id": str(raw.get("id") or ""),
             "number": str(raw.get("display_id") or ""),
@@ -336,9 +435,10 @@ def _normalize_invoice(provider: str, raw: dict, customer_names: dict) -> dict:
             "date": (raw.get("created_at") or "")[:10],
             "due_date": None,
             "subtotal": subtotal_cents / 100,
-            "btw_rate": _guess_btw(subtotal_cents / 100, (subtotal_cents + tax_cents) / 100) if subtotal_cents > 0 else 21,
+            "btw_rate": btw_rate,
             "status": {"captured": "betaald", "not_paid": "concept", "awaiting": "verzonden", "refunded": "concept"}.get(raw.get("payment_status", ""), {"completed": "betaald", "pending": "concept", "archived": "betaald"}.get(raw.get("status", ""), "concept")),
             "notes": "",
+            "lines": lines,
         }
     # Generic fallback for unknown providers
     return {
@@ -352,6 +452,7 @@ def _normalize_invoice(provider: str, raw: dict, customer_names: dict) -> dict:
         "btw_rate": 21,
         "status": "concept",
         "notes": raw.get("notes") or raw.get("note") or raw.get("reference") or "",
+        "lines": [],
     }
 
 
@@ -461,6 +562,27 @@ async def universal_import(
             elif abs(btw_rate) < 2:
                 btw_rate = 0
 
+            # Use detailed line items when available, fall back to single-line total
+            invoice_lines = norm.get("lines") or []
+            if not invoice_lines:
+                invoice_lines = [{
+                    "desc": f"{norm['number'] or provider}",
+                    "qty": 1,
+                    "price": round(norm["subtotal"], 2),
+                    "btwRate": btw_rate,
+                }]
+            else:
+                # Round prices and normalize btw rates on provider line items
+                for line in invoice_lines:
+                    line["price"] = round(line["price"], 2)
+                    lr = line.get("btwRate", btw_rate)
+                    if abs(lr - 21) < 3:
+                        line["btwRate"] = 21
+                    elif abs(lr - 9) < 3:
+                        line["btwRate"] = 9
+                    elif abs(lr) < 2:
+                        line["btwRate"] = 0
+
             db.add(Invoice(
                 id=uuid.uuid4(),
                 company_id=company_id,
@@ -469,12 +591,7 @@ async def universal_import(
                 client_id=norm["client_id"],
                 date=_safe_date(norm["date"]),
                 due_date=_safe_date(norm["due_date"]),
-                lines=[{
-                    "desc": f"{norm['number'] or provider}",
-                    "qty": 1,
-                    "price": round(norm["subtotal"], 2),
-                    "btwRate": btw_rate,
-                }],
+                lines=invoice_lines,
                 status=norm["status"],
                 notes=norm["notes"] or None,
                 source=provider,
