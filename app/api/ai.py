@@ -57,15 +57,118 @@ async def classify_transaction(
     return result
 
 
+async def _build_data_context(user: User, db: AsyncSession) -> str:
+    """Build a rich data context string from the user's workspace for AI enrichment."""
+    from app.models.invoice import Invoice
+    from app.models.expense import Expense
+    from app.models.debtor import Debtor
+    from app.models.company import Company
+
+    ctx_parts = []
+
+    # Company info
+    if user.company_id:
+        comp_result = await db.execute(select(Company).where(Company.id == user.company_id))
+        comp = comp_result.scalar_one_or_none()
+        if comp:
+            ctx_parts.append(f"Bedrijf: {comp.name} (KvK: {comp.kvk_number or '-'}, BTW: {comp.btw_number or '-'})")
+
+    # Invoices summary
+    cid = user.company_id
+    if cid:
+        inv_q = select(Invoice).where(Invoice.company_id == cid)
+    else:
+        inv_q = select(Invoice)
+
+    inv_result = await db.execute(inv_q)
+    invoices = inv_result.scalars().all()
+
+    if invoices:
+        total_rev = sum(sum(l.get("qty", 0) * l.get("price", 0) for l in (i.lines or [])) for i in invoices if getattr(i, 'document_type', 'factuur') == 'factuur')
+        total_btw = sum(sum(l.get("qty", 0) * l.get("price", 0) * l.get("btwRate", 0) / 100 for l in (i.lines or [])) for i in invoices if getattr(i, 'document_type', 'factuur') == 'factuur')
+        betaald = [i for i in invoices if i.status == 'betaald' and getattr(i, 'document_type', 'factuur') == 'factuur']
+        verzonden = [i for i in invoices if i.status == 'verzonden' and getattr(i, 'document_type', 'factuur') == 'factuur']
+        verlopen = [i for i in invoices if i.status == 'verlopen' and getattr(i, 'document_type', 'factuur') == 'factuur']
+        offertes = [i for i in invoices if getattr(i, 'document_type', None) == 'offerte']
+        creditnotas = [i for i in invoices if getattr(i, 'document_type', None) == 'creditnota']
+
+        ctx_parts.append(f"\nFACTUREN ({len([i for i in invoices if getattr(i, 'document_type', 'factuur') == 'factuur'])} totaal):")
+        ctx_parts.append(f"- Totale omzet (excl BTW): €{total_rev:,.2f}")
+        ctx_parts.append(f"- Totale BTW gefactureerd: €{total_btw:,.2f}")
+        ctx_parts.append(f"- Betaald: {len(betaald)} facturen")
+        ctx_parts.append(f"- Openstaand/verzonden: {len(verzonden)} facturen")
+        ctx_parts.append(f"- Verlopen: {len(verlopen)} facturen")
+        if offertes:
+            ctx_parts.append(f"- Offertes: {len(offertes)}")
+        if creditnotas:
+            ctx_parts.append(f"- Creditnota's: {len(creditnotas)}")
+
+        # Top 5 recent invoices
+        recent = sorted([i for i in invoices if getattr(i, 'document_type', 'factuur') == 'factuur'], key=lambda x: str(x.date), reverse=True)[:5]
+        if recent:
+            ctx_parts.append("\nRecente facturen:")
+            for inv in recent:
+                total = sum(l.get("qty", 0) * l.get("price", 0) * (1 + l.get("btwRate", 0) / 100) for l in (inv.lines or []))
+                ctx_parts.append(f"  {inv.number} — {inv.client} — €{total:,.2f} — {inv.status} — {inv.date}")
+
+        # Top 5 overdue
+        if verlopen:
+            ctx_parts.append(f"\nVerlopen facturen ({len(verlopen)}):")
+            for inv in verlopen[:5]:
+                total = sum(l.get("qty", 0) * l.get("price", 0) * (1 + l.get("btwRate", 0) / 100) for l in (inv.lines or []))
+                ctx_parts.append(f"  {inv.number} — {inv.client} — €{total:,.2f} — vervallen {inv.due_date}")
+
+    # Expenses
+    if cid:
+        exp_q = select(Expense).where(Expense.company_id == cid)
+    else:
+        exp_q = select(Expense)
+    exp_result = await db.execute(exp_q)
+    expenses = exp_result.scalars().all()
+    if expenses:
+        total_exp = sum(float(e.amount) for e in expenses)
+        ctx_parts.append(f"\nUITGAVEN ({len(expenses)} totaal): €{total_exp:,.2f}")
+
+    # Debtors
+    if cid:
+        deb_q = select(Debtor).where(Debtor.company_id == cid)
+    else:
+        deb_q = select(Debtor)
+    deb_result = await db.execute(deb_q)
+    debtors = deb_result.scalars().all()
+    if debtors:
+        ctx_parts.append(f"\nKLANTEN/DEBITEUREN: {len(debtors)} totaal")
+        for d in debtors[:10]:
+            ctx_parts.append(f"  {d.name} ({d.city or '-'})")
+
+    if not ctx_parts:
+        return "Geen bedrijfsdata beschikbaar — het bedrijf heeft nog geen facturen, uitgaven of klanten."
+
+    return "\n".join(ctx_parts)
+
+
 @router.post("/chat", response_model=ChatResponse)
 async def ai_chat(
     data: ChatRequest,
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
-    """Stel een boekhoudkundige vraag aan de AI."""
+    """Stel een boekhoudkundige vraag aan de AI — verrijkt met echte bedrijfsdata."""
+    # Build data context from the user's actual workspace
+    data_context = await _build_data_context(current_user, db)
+
+    enriched_message = f"""De gebruiker stelt een vraag over hun boekhouding. Gebruik de onderstaande ECHTE bedrijfsdata
+om een concreet, specifiek antwoord te geven met echte cijfers. Verwijs naar specifieke facturen,
+klanten of bedragen waar relevant. Geef geen generieke antwoorden — gebruik de data.
+
+=== BEDRIJFSDATA ===
+{data_context}
+=== EINDE DATA ===
+
+Vraag van de gebruiker: {data.message}"""
+
     classifier = AIClassifierService()
-    reply = await classifier.chat(data.message)
+    reply = await classifier.chat(enriched_message)
     usage = await track_ai_usage(
         db,
         user=current_user,
