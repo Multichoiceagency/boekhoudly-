@@ -9,7 +9,7 @@ import uuid
 from datetime import datetime, date
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select
+from sqlalchemy import select, delete
 from app.database import get_db
 from app.models.user import User
 from app.models.invoice import Invoice
@@ -299,6 +299,21 @@ async def import_perfex_credit_notes(
     return {"created": created, "skipped": skipped, "total_cached": len(records)}
 
 
+@router.delete("/perfex/clear")
+async def clear_perfex_imports(
+    admin: User = Depends(_require_admin),
+    db: AsyncSession = Depends(get_db),
+):
+    """Delete ALL previously imported Perfex records so they can be re-imported fresh."""
+    inv_del = await db.execute(delete(Invoice).where(Invoice.source == "perfex"))
+    deb_del = await db.execute(delete(Debtor).where(Debtor.source == "perfex"))
+    await db.flush()
+    return {
+        "deleted_invoices": inv_del.rowcount,
+        "deleted_debtors": deb_del.rowcount,
+    }
+
+
 @router.post("/perfex/all")
 async def import_perfex_all(
     admin: User = Depends(_require_admin),
@@ -315,3 +330,16 @@ async def import_perfex_all(
         "estimates": estimates,
         "credit_notes": credit_notes,
     }
+
+
+@router.delete("/universal/{provider}/clear")
+async def clear_universal_imports(
+    provider: str,
+    user: User = Depends(_require_admin),
+    db: AsyncSession = Depends(get_db),
+):
+    """Delete ALL previously imported records from a specific provider."""
+    inv_del = await db.execute(delete(Invoice).where(Invoice.source == provider))
+    deb_del = await db.execute(delete(Debtor).where(Debtor.source == provider))
+    await db.flush()
+    return {"provider": provider, "deleted_invoices": inv_del.rowcount, "deleted_debtors": deb_del.rowcount}
