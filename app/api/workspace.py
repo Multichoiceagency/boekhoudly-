@@ -146,6 +146,8 @@ async def update_company(company_id: str, data: dict, user: User = Depends(get_c
         c.postal_code = data["postcode"]
     if "primaryColor" in data:
         c.primary_color = data["primaryColor"]
+    if "logo" in data:
+        c.logo_url = data["logo"]  # Can be base64 data URL or external URL
     if "website" in data:
         # Store in settings JSONB
         settings = c.settings or {}
