@@ -10,6 +10,12 @@ from app.services.integrations.moneybird_client import MoneybirdClient
 from app.services.integrations.wefact_client import WeFactClient
 from app.services.integrations.twinfield_client import TwinfieldClient
 from app.services.integrations.yuki_client import YukiClient
+from app.services.integrations.snelstart_client import SnelStartClient
+from app.services.integrations.woocommerce_client import WooCommerceClient
+from app.services.integrations.shopify_client import ShopifyClient
+from app.services.integrations.magento_client import MagentoClient
+from app.services.integrations.wix_client import WixClient
+from app.services.integrations.medusa_client import MedusaClient
 
 
 _REGISTRY = {
@@ -18,6 +24,12 @@ _REGISTRY = {
     "wefact": WeFactClient,
     "twinfield": TwinfieldClient,
     "yuki": YukiClient,
+    "snelstart": SnelStartClient,
+    "woocommerce": WooCommerceClient,
+    "shopify": ShopifyClient,
+    "magento": MagentoClient,
+    "wix": WixClient,
+    "medusa": MedusaClient,
 }
 
 

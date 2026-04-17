@@ -46,3 +46,12 @@ class TwinfieldClient(IntegrationClient):
             return {"status": "error", "message": f"Twinfield token endpoint HTTP {r.status_code}: {r.text[:200]}"}
         except Exception as e:
             return {"status": "error", "message": f"Verbinding mislukt: {str(e)[:200]}"}
+
+    async def list_customers(self) -> list[dict]:
+        raise NotImplementedError("Twinfield data-sync wordt binnenkort ondersteund")
+
+    async def list_invoices(self) -> list[dict]:
+        raise NotImplementedError("Twinfield data-sync wordt binnenkort ondersteund")
+
+    async def list_payments(self) -> list[dict]:
+        raise NotImplementedError("Twinfield data-sync wordt binnenkort ondersteund")

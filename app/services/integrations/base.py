@@ -66,7 +66,7 @@ PROVIDERS: list[ProviderSpec] = [
                             help="Bv. eu1.twinfield.com — wordt automatisch gevonden na auth"),
             CredentialField("company_code", "Company code", "text"),
         ],
-        status="beta",
+        status="stable",
     ),
     ProviderSpec(
         slug="yuki", name="Yuki", tagline="Yuki Works boekhouding",
@@ -78,7 +78,7 @@ PROVIDERS: list[ProviderSpec] = [
             CredentialField("administration_id", "Administration ID (GUID)", "text",
                             "00000000-0000-0000-0000-000000000000"),
         ],
-        status="beta",
+        status="stable",
     ),
     ProviderSpec(
         slug="snelstart", name="SnelStart", tagline="Boekingen, relaties en BTW-aangiftes",
@@ -90,7 +90,7 @@ PROVIDERS: list[ProviderSpec] = [
             CredentialField("subscription_key", "Subscription Key", "password",
                             help="SnelStart B2B API subscription key"),
         ],
-        status="beta",
+        status="stable",
     ),
     ProviderSpec(
         slug="woocommerce", name="WooCommerce", tagline="WordPress webshop bestellingen en producten",
@@ -125,7 +125,7 @@ PROVIDERS: list[ProviderSpec] = [
             CredentialField("access_token", "Bearer Token", "password",
                             help="Magento Admin → System → Integrations → Access Token"),
         ],
-        status="beta",
+        status="stable",
     ),
     ProviderSpec(
         slug="wix", name="Wix", tagline="Wix eCommerce bestellingen",
@@ -137,7 +137,7 @@ PROVIDERS: list[ProviderSpec] = [
             CredentialField("site_id", "Site ID", "text",
                             help="Je Wix site ID"),
         ],
-        status="beta",
+        status="stable",
     ),
     ProviderSpec(
         slug="medusa", name="Medusa", tagline="Open-source headless commerce",
