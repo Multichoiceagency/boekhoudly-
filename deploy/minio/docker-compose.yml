@@ -1,0 +1,59 @@
+# MinIO object storage for FiscalFlow — deploy as a separate Coolify resource.
+#
+# Deploy steps in Coolify:
+#   1. New Resource → Docker Compose → point it at this file (or paste the content).
+#   2. Set environment variables:
+#        MINIO_ROOT_USER     — access key (min 3 chars)
+#        MINIO_ROOT_PASSWORD — secret key (min 8 chars, generate a strong one)
+#        MINIO_BUCKET        — bucket name, e.g. "fiscalflow-documents"
+#   3. In Coolify UI assign a domain to the `minio` service (port 9000) — e.g.
+#      storage.fiscaalflow.nl. This is the S3 API endpoint. Optionally also
+#      assign a domain to the `console` port (9001) for the admin UI.
+#   4. After first deploy, `minio-init` creates the bucket automatically.
+#   5. On the backend service, set:
+#        S3_ENDPOINT=https://storage.fiscaalflow.nl
+#        S3_ACCESS_KEY=<same as MINIO_ROOT_USER>
+#        S3_SECRET_KEY=<same as MINIO_ROOT_PASSWORD>
+#        S3_BUCKET=<same as MINIO_BUCKET>
+
+services:
+  minio:
+    image: minio/minio:latest
+    restart: unless-stopped
+    command: server /data --console-address ":9001"
+    environment:
+      MINIO_ROOT_USER: ${MINIO_ROOT_USER}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD}
+      MINIO_BROWSER_REDIRECT_URL: ${MINIO_BROWSER_REDIRECT_URL:-}
+    expose:
+      - "9000"
+      - "9001"
+    volumes:
+      - minio_data:/data
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:9000/minio/health/live"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 20s
+
+  minio-init:
+    image: minio/mc:latest
+    depends_on:
+      minio:
+        condition: service_healthy
+    # Bucket stays private — backend serves files via pre-signed URLs (get_file_url).
+    entrypoint: >
+      /bin/sh -c "
+      mc alias set local http://minio:9000 \"$MINIO_ROOT_USER\" \"$MINIO_ROOT_PASSWORD\" &&
+      mc mb --ignore-existing local/\"$MINIO_BUCKET\" &&
+      echo '[init] bucket ready: '$MINIO_BUCKET
+      "
+    environment:
+      MINIO_ROOT_USER: ${MINIO_ROOT_USER}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD}
+      MINIO_BUCKET: ${MINIO_BUCKET:-fiscalflow-documents}
+    restart: "no"
+
+volumes:
+  minio_data:
