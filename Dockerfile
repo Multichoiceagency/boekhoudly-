@@ -3,6 +3,7 @@ FROM python:3.12-slim
 RUN apt-get update && apt-get install -y --no-install-recommends \
     tesseract-ocr \
     tesseract-ocr-nld \
+    poppler-utils \
     libpq-dev \
     gcc \
     && rm -rf /var/lib/apt/lists/*

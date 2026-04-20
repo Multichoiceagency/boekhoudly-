@@ -168,32 +168,45 @@ async def parse_csv(
     file: UploadFile = File(...),
     current_user: User = Depends(get_current_user),
 ):
-    """Parse a CSV file and return structured items for review.
+    """Parse a CSV or XLSX file and return structured items for review.
 
-    Supports: SnelStart, Moneybird, WeFact, Shopify, and generic CSV formats.
+    Supports: SnelStart, Moneybird, WeFact, Shopify, and generic CSV/XLSX formats.
     Auto-detects format from headers. Returns items with suggested type,
     amount, BTW, category, etc. for the user to review before accepting.
     """
-    if not file.filename or not file.filename.lower().endswith('.csv'):
-        raise HTTPException(status_code=400, detail="Alleen CSV bestanden worden ondersteund")
+    filename = (file.filename or "").lower()
+    if not filename.endswith(('.csv', '.xlsx', '.xls')):
+        raise HTTPException(status_code=400, detail="Alleen CSV of XLSX bestanden worden ondersteund")
 
     content = await file.read()
-    # Try UTF-8 first, then Latin-1 (common in Dutch exports)
-    try:
-        text = content.decode('utf-8-sig')
-    except UnicodeDecodeError:
-        text = content.decode('latin-1')
 
-    # Detect delimiter
-    first_line = text.split('\n')[0]
-    delimiter = ';' if ';' in first_line else ','
+    if filename.endswith(('.xlsx', '.xls')):
+        try:
+            headers, rows = _read_xlsx_rows(content)
+        except ImportError:
+            raise HTTPException(status_code=500, detail="XLSX-ondersteuning is niet geïnstalleerd op de server")
+        except Exception as e:
+            logger.warning(f"XLSX parse error: {e}")
+            raise HTTPException(status_code=400, detail=f"Kon XLSX niet lezen: {e}")
+    else:
+        # Try UTF-8 first, then Latin-1 (common in Dutch exports)
+        try:
+            text = content.decode('utf-8-sig')
+        except UnicodeDecodeError:
+            text = content.decode('latin-1')
 
-    reader = csv.DictReader(io.StringIO(text), delimiter=delimiter)
-    headers = reader.fieldnames or []
+        # Detect delimiter
+        first_line = text.split('\n')[0]
+        delimiter = ';' if ';' in first_line else ','
+
+        reader = csv.DictReader(io.StringIO(text), delimiter=delimiter)
+        headers = list(reader.fieldnames or [])
+        rows = list(reader)
+
     fmt = _detect_format(headers)
 
     items = []
-    for i, row in enumerate(reader):
+    for i, row in enumerate(rows):
         if i >= 500:  # Safety limit
             break
         try:
@@ -207,7 +220,7 @@ async def parse_csv(
                     "accepted": False,
                 })
         except Exception as e:
-            logger.warning(f"CSV row {i} parse error: {e}")
+            logger.warning(f"Row {i} parse error: {e}")
 
     return {
         "format": fmt,
@@ -215,6 +228,37 @@ async def parse_csv(
         "total_rows": len(items),
         "items": items,
     }
+
+
+def _read_xlsx_rows(content: bytes) -> tuple[list[str], list[dict]]:
+    """Read an XLSX file and return (headers, [row-dict, ...]) like csv.DictReader."""
+    from openpyxl import load_workbook
+
+    wb = load_workbook(io.BytesIO(content), data_only=True, read_only=True)
+    sheet = wb.active
+    if sheet is None:
+        return [], []
+
+    iterator = sheet.iter_rows(values_only=True)
+    try:
+        first = next(iterator)
+    except StopIteration:
+        return [], []
+
+    headers = [("" if v is None else str(v)).strip() for v in first]
+    rows: list[dict] = []
+    for row in iterator:
+        if row is None:
+            continue
+        values = list(row) + [None] * (len(headers) - len(row))
+        rec = {}
+        for h, v in zip(headers, values):
+            if not h:
+                continue
+            rec[h] = "" if v is None else v
+        if any(str(v).strip() for v in rec.values()):
+            rows.append(rec)
+    return headers, rows
 
 
 @router.post("/accept")

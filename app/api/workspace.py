@@ -161,6 +161,56 @@ async def update_company(company_id: str, data: dict, user: User = Depends(get_c
     return _company_to_dict(c)
 
 
+@router.delete("/companies/{company_id}")
+async def delete_company(company_id: str, user: User = Depends(get_current_user), db: AsyncSession = Depends(get_db)):
+    """Delete a company and all its related data.
+
+    Only admins and accountants (who own the company) can delete.
+    Cascades to invoices, expenses, debtors, creditors, bank transactions,
+    products, documents, subscriptions, and unlinks users.
+    """
+    from app.models.document import Document
+    from app.models.company_subscription import CompanySubscription
+
+    result = await db.execute(select(Company).where(Company.id == company_id))
+    c = result.scalar_one_or_none()
+    if not c:
+        raise HTTPException(status_code=404, detail="Bedrijf niet gevonden")
+
+    # Authorisation
+    if user.role == "admin":
+        pass
+    elif user.role == "accountant":
+        sub_check = await db.execute(
+            select(CompanySubscription).where(
+                CompanySubscription.company_id == c.id,
+                CompanySubscription.accountant_id == user.id,
+            )
+        )
+        if not sub_check.scalar_one_or_none() and user.company_id != c.id:
+            raise HTTPException(status_code=403, detail="Geen rechten om dit bedrijf te verwijderen")
+    else:
+        raise HTTPException(status_code=403, detail="Geen rechten om bedrijven te verwijderen")
+
+    # Cascade deletes (no FK ON DELETE CASCADE is defined — do it explicitly)
+    await db.execute(delete(Invoice).where(Invoice.company_id == c.id))
+    await db.execute(delete(Expense).where(Expense.company_id == c.id))
+    await db.execute(delete(Debtor).where(Debtor.company_id == c.id))
+    await db.execute(delete(Creditor).where(Creditor.company_id == c.id))
+    await db.execute(delete(BankTransaction).where(BankTransaction.company_id == c.id))
+    await db.execute(delete(Product).where(Product.company_id == c.id))
+    await db.execute(delete(Document).where(Document.company_id == c.id))
+    await db.execute(delete(CompanySubscription).where(CompanySubscription.company_id == c.id))
+
+    # Unlink users pointing at this company (don't delete users)
+    from sqlalchemy import update
+    await db.execute(update(User).where(User.company_id == c.id).values(company_id=None))
+
+    await db.delete(c)
+    await db.flush()
+    return {"ok": True, "id": str(c.id)}
+
+
 def _company_to_dict(c: Company) -> dict:
     settings = c.settings or {}
     return {

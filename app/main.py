@@ -7,12 +7,32 @@ logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 
+def _validate_critical_config():
+    """Log warnings for misconfigured env vars that cause silent production failures."""
+    from app.config import get_settings
+    s = get_settings()
+    problems = []
+    if s.JWT_SECRET == "change-this-to-a-random-secret":
+        problems.append("JWT_SECRET gebruikt de default waarde — zet een eigen secret via env")
+    if s.S3_ENDPOINT.startswith("http://localhost"):
+        problems.append("S3_ENDPOINT staat op localhost — uploads zullen falen op productie")
+    if s.S3_ACCESS_KEY == "minioadmin":
+        problems.append("S3_ACCESS_KEY staat op default 'minioadmin'")
+    if not s.MAIL_PASSWORD:
+        problems.append("MAIL_PASSWORD leeg — backend SMTP-fallback werkt niet")
+    if not (s.GROQ_API_KEY or s.OPENAI_API_KEY or s.ANTHROPIC_API_KEY or s.OLLAMA_BASE_URL):
+        problems.append("Geen AI-provider geconfigureerd (GROQ/OPENAI/ANTHROPIC/OLLAMA) — classificatie valt terug op keyword-matching")
+    for p in problems:
+        logger.warning(f"[config] {p}")
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     # Startup
     from app.database import init_db, async_session, engine
     from sqlalchemy import text
     import app.models  # noqa: ensure all models are imported
+    _validate_critical_config()
     await init_db()
     logger.info("FiscalFlow AI API gestart - database tables ready")
 
