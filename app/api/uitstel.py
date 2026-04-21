@@ -1,10 +1,11 @@
-"""Uitstel van betaling — Belastingdienst formulier OV1352.
+"""Uitstel aangifte inkomstenbelasting — Belastingdienst formulier IB 104.
 
-Endpoints to pre-fill, AI-generate the reason letter, and export
-the payment arrangement request form.
+Prefill endpoint + AI-gegenereerde motivatie voor als uitstel > 4 maanden
+wordt gevraagd. Het gegenereerde PDF bestand wordt frontend-side gemaakt
+in `usePdfTemplates.ts`.
 """
 import logging
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
 from app.database import get_db
@@ -16,27 +17,19 @@ from app.utils.auth import get_current_user
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/uitstel", tags=["Uitstel"])
 
-UITSTEL_AI_PROMPT = """Je bent een ervaren Nederlands belastingadviseur. Schrijf een professionele,
-zakelijke motivatiebrief voor een verzoek om uitstel van betaling bij de Belastingdienst.
+UITSTEL_AI_PROMPT = """Je bent een ervaren Nederlands belastingadviseur. Schrijf een korte,
+zakelijke motivatie voor een verzoek om uitstel van de aangifte inkomstenbelasting
+LANGER dan 4 maanden. Richt je op de Belastingdienst.
 
-Bedrijfsgegevens:
-- Naam: {company_name}
-- KvK: {kvk}
-- Branche: {industry}
+Gegevens:
+- Naam aanvrager: {naam}
+- Aangiftejaar: {aangiftejaar}
+- Gevraagd uitstel tot: {tot_datum}
+- Reden: {reden}
 
-Belastingschuld:
-- Belastingsoort: {tax_type}
-- Aanslagnummer: {assessment_number}
-- Openstaand bedrag: €{amount}
-- Reden: {reason}
-
-Voorstel:
-- Maandelijks bedrag: €{monthly_amount}
-- Aantal termijnen: {num_terms}
-
-Schrijf de motivatiebrief in maximaal 150 woorden. Toon begrip, wees concreet over de
-financiële situatie en het herstelplan. Eindig positief. Alleen de brieftekst, geen
-aanhef of ondertekening — die staan al op het formulier.
+Houd het onder de 120 woorden. Wees concreet en zakelijk. Geen aanhef
+("Geachte heer/mevrouw"), geen ondertekening — alleen de lopende tekst
+die in het motivatievak van het formulier past.
 """
 
 
@@ -45,63 +38,47 @@ async def prefill_form(
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
-    """Pre-fill the uitstel form from the user's company data."""
+    """Pre-fill the IB 104 form from the user's profile + active company."""
     company = None
     if current_user.company_id:
         result = await db.execute(select(Company).where(Company.id == current_user.company_id))
         company = result.scalar_one_or_none()
 
-    # Fallback for admin / users without company_id: pick the first company in the system
-    if not company:
-        result = await db.execute(select(Company).limit(1))
-        company = result.scalar_one_or_none()
+    # Split "Postcode en woonplaats" from Company.postal_code / city for convenience.
+    postal_code = (company.postal_code if company else "") or ""
+    city = (company.city if company else "") or ""
+    address = (company.address if company else "") or ""
 
     return {
-        "company_name": company.name if company else "",
-        "kvk_number": company.kvk_number if company else "",
-        "btw_number": company.btw_number if company else "",
-        "address": company.address if company else "",
-        "postal_code": company.postal_code if company else "",
-        "city": company.city if company else "",
-        "iban": company.iban if company else "",
-        "phone": company.phone if company else "",
-        "industry": company.industry if company else "",
-        "contact_name": current_user.full_name or "",
-        "contact_email": current_user.email or "",
+        "naam": current_user.full_name or (company.name if company else ""),
+        "adres": address,
+        "postcode": postal_code,
+        "woonplaats": city,
+        "bsn": "",
+        "telefoon": (company.phone if company else "") or "",
     }
 
 
 @router.post("/generate-reason")
-async def generate_reason(
-    data: dict,
-    current_user: User = Depends(get_current_user),
-):
-    """Use AI to generate a professional Dutch motivation letter for the payment arrangement request."""
+async def generate_reason(data: dict):
+    """AI-generate a Dutch motivation text for extended (> 4 months) uitstel."""
     prompt = UITSTEL_AI_PROMPT.format(
-        company_name=data.get("company_name", ""),
-        kvk=data.get("kvk_number", ""),
-        industry=data.get("industry", ""),
-        tax_type=data.get("tax_type", "Omzetbelasting"),
-        assessment_number=data.get("assessment_number", ""),
-        amount=data.get("amount", "0"),
-        reason=data.get("reason_summary", "tijdelijke liquiditeitskrapte"),
-        monthly_amount=data.get("monthly_amount", "0"),
-        num_terms=data.get("num_terms", "12"),
+        naam=data.get("naam", ""),
+        aangiftejaar=data.get("aangiftejaar", ""),
+        tot_datum=data.get("tot_datum", ""),
+        reden=data.get("reden_kort", "tijdelijke omstandigheden"),
     )
-
     try:
         ai = AIClassifierService()
         letter = await ai.chat(prompt)
-        return {"letter": letter}
+        return {"letter": letter.strip()}
     except Exception as e:
-        logger.warning(f"AI generation failed: {e}")
+        logger.warning(f"AI uitstel-motivatie mislukt: {e}")
         return {
             "letter": (
-                f"Hierbij verzoek ik om een betalingsregeling voor de openstaande "
-                f"belastingschuld van €{data.get('amount', '0')} ({data.get('tax_type', 'belasting')}). "
-                f"Door tijdelijke liquiditeitskrapte ben ik niet in staat het volledige bedrag "
-                f"in één keer te voldoen. Ik stel voor om maandelijks €{data.get('monthly_amount', '0')} "
-                f"af te lossen in {data.get('num_terms', '12')} termijnen. "
-                f"Ik verwacht dat de financiële situatie binnen deze periode zal verbeteren."
+                "In verband met het wachten op aanvullende administratieve gegevens "
+                "van derden (werkgevers, banken, pensioenuitvoerders) is het niet mogelijk "
+                "om de aangifte binnen vier maanden volledig en correct in te dienen. "
+                "Ik verzoek vriendelijk om uitstel tot de hierboven genoemde datum."
             )
         }
