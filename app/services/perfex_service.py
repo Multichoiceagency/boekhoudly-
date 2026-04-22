@@ -36,17 +36,24 @@ class PerfexCRMClient:
             "Accept": "application/json",
         }
 
-    async def _request(self, method: str, endpoint: str, params: dict | None = None, json: dict | None = None) -> Any:
+    # Default request timeout. The bulk /customers payload is ~100 KB so we
+    # allow more than the httpx default (5s). Individual callers (notably the
+    # fast-path bulk probe in _try_bulk_list) can override this to fail
+    # faster when an install is slow on a particular endpoint.
+    DEFAULT_TIMEOUT = 60
+
+    async def _request(self, method: str, endpoint: str, params: dict | None = None, json: dict | None = None, timeout: float | None = None) -> Any:
         url = f"{self.api_url}/{endpoint.lstrip('/')}"
+        tmo = timeout if timeout is not None else self.DEFAULT_TIMEOUT
         try:
-            async with httpx.AsyncClient(timeout=30) as client:
+            async with httpx.AsyncClient(timeout=tmo) as client:
                 response = await client.request(method, url, headers=self.headers, params=params, json=json)
         except httpx.ConnectError as e:
             # DNS/SSL/network problems have no useful `str(e)` for some variants
             # — wrap so the test-connection error surface never goes empty.
             raise RuntimeError(f"Kan {url} niet bereiken (netwerk/DNS): {str(e) or type(e).__name__}") from e
         except httpx.TimeoutException as e:
-            raise RuntimeError(f"Time-out bij {url} (30s)") from e
+            raise RuntimeError(f"Time-out bij {url} ({tmo:.0f}s) — Perfex reageerde niet op tijd") from e
         except httpx.HTTPError as e:
             raise RuntimeError(f"HTTP-fout bij {url}: {str(e) or type(e).__name__}") from e
 
@@ -92,8 +99,8 @@ class PerfexCRMClient:
             body_preview = (response.text or "")[:200].replace("\n", " ")
             raise RuntimeError(f"Ongeldige JSON van {url}: {body_preview}") from e
 
-    async def _get(self, endpoint: str, params: dict | None = None) -> Any:
-        return await self._request("GET", endpoint, params=params)
+    async def _get(self, endpoint: str, params: dict | None = None, timeout: float | None = None) -> Any:
+        return await self._request("GET", endpoint, params=params, timeout=timeout)
 
     async def _post(self, endpoint: str, json: dict | None = None) -> Any:
         return await self._request("POST", endpoint, json=json)
@@ -123,34 +130,42 @@ class PerfexCRMClient:
         Themesic REST API and proves auth works regardless of whether the
         undocumented bulk route is configured.
         """
+        # The bulk /customers endpoint on this install can be ~100 KB which
+        # sometimes times out on slow egress. Probe with the small documented
+        # /customers/search/a endpoint first — it works on every Themesic
+        # install and is a few KB. The bulk is attempted *after* for the
+        # nicer "N klanten" message, with a short timeout so a slow bulk
+        # doesn't flip a working connection into "Time-out".
         try:
-            bulk = self._as_list(await self._get("customers"))
-            if bulk:
-                return {
-                    "status": "connected",
-                    "message": f"Verbonden met Perfex CRM ({len(bulk)} klanten gevonden via /customers)",
-                    "customer_count": len(bulk),
-                }
-            # Empty bulk — could mean "no customers" or "bulk endpoint missing".
-            # A documented search call disambiguates: if it responds OK (even
-            # with 0 results) the authtoken is valid.
-            probe = self._as_list(await self._get("customers/search/a"))
-            return {
-                "status": "connected",
-                "message": (
-                    f"Verbonden met Perfex CRM (auth werkt; zoekopdracht 'a' vond {len(probe)} klanten). "
-                    "De bulk /customers route was leeg of is niet beschikbaar op deze install — "
-                    "de live sync gebruikt /search voor paginering."
-                ),
-                "customer_count": len(probe),
-            }
+            probe = self._as_list(await self._get("customers/search/a", timeout=15))
         except PermissionError as e:
             return {"status": "error", "message": str(e) or "Ongeldige authtoken"}
         except Exception as e:
-            # Always include a non-empty detail so the UI never renders a bare
-            # "Verbinding mislukt:" with nothing after the colon.
             detail = str(e) or type(e).__name__
             return {"status": "error", "message": f"Verbinding mislukt: {detail[:400]}"}
+
+        bulk_count: int | None = None
+        try:
+            bulk = self._as_list(await self._get("customers", timeout=8))
+            if bulk:
+                bulk_count = len(bulk)
+        except Exception:
+            bulk_count = None  # best-effort only — auth already validated
+
+        if bulk_count is not None:
+            return {
+                "status": "connected",
+                "message": f"Verbonden met Perfex CRM ({bulk_count} klanten)",
+                "customer_count": bulk_count,
+            }
+        return {
+            "status": "connected",
+            "message": (
+                f"Verbonden met Perfex CRM (auth werkt; zoekopdracht 'a' vond {len(probe)} klanten). "
+                "Live sync gebruikt /search voor paginering."
+            ),
+            "customer_count": len(probe),
+        }
 
     # Short common letters that cover virtually every Dutch company name, used
     # to fan out the /search endpoint when the bulk /<resource> endpoint isn't
@@ -167,13 +182,15 @@ class PerfexCRMClient:
         """Try the undocumented `GET /api/<resource>` bulk list first.
 
         Many Perfex installs still return the full list there, so it's always
-        worth a single call before the expensive fan-out. Returns [] if the
-        endpoint 404s or responds with `{status: false}`.
+        worth a single call before the expensive fan-out. Uses a short
+        timeout (10s) so a slow bulk endpoint doesn't hold up the whole sync
+        — we fail fast and fall back to the paginated /search route. Returns
+        [] on 404, `{status: false}` or any transport error.
         """
         try:
-            data = await self._get(resource)
+            data = await self._get(resource, timeout=10)
         except Exception as e:
-            logger.debug(f"Perfex bulk {resource} failed: {e}")
+            logger.debug(f"Perfex bulk {resource} failed (falling back to search): {e}")
             return []
         lst = self._as_list(data)
         return [r for r in lst if isinstance(r, dict)]
