@@ -78,17 +78,37 @@ def _normalize_customer(provider: str, raw: dict) -> dict:
     Field names verified against official API documentation per provider."""
 
     if provider == "perfex":
-        # Themesic REST API: userid, company, vat, address, city
+        # Themesic REST API customer fields:
+        # userid, company, vat, phonenumber, website, country, city, zip,
+        # state, address, default_language, default_currency, longitude,
+        # latitude, stripe_id, billing_* , shipping_*, datecreated.
+        #
+        # We promote the most-used ones to Debtor columns and stash the
+        # richer Perfex-specific bits in `extra` so nothing is lost.
+        billing_address = " ".join(
+            str(raw.get(k) or "").strip() for k in ("billing_street", "billing_city", "billing_zip") if raw.get(k)
+        ).strip()
+        extra = {k: raw.get(k) for k in (
+            "default_language", "default_currency", "stripe_id",
+            "longitude", "latitude", "groups_in", "partnership_type",
+            "billing_street", "billing_city", "billing_state", "billing_zip", "billing_country",
+            "shipping_street", "shipping_city", "shipping_state", "shipping_zip", "shipping_country",
+            "datecreated", "active", "leadid", "show_primary_contact",
+        ) if raw.get(k) not in (None, "")}
         return {
             "ext_id": str(raw.get("userid") or raw.get("id") or ""),
             "name": raw.get("company") or raw.get("name") or "",
             "email": (raw.get("email") or "").strip(),
-            "address": raw.get("address") or raw.get("billing_street") or "",
+            "address": raw.get("address") or raw.get("billing_street") or billing_address or "",
             "city": (raw.get("city") or raw.get("billing_city") or "").strip(),
             "vat": raw.get("vat") or "",
             "kvk": "",
             "phone": raw.get("phonenumber") or "",
-            "zip": raw.get("zip") or "",
+            "zip": raw.get("zip") or raw.get("billing_zip") or "",
+            "state": raw.get("state") or raw.get("billing_state") or "",
+            "country": raw.get("country") or raw.get("billing_country") or "",
+            "website": raw.get("website") or "",
+            "extra": extra or None,
         }
     if provider == "moneybird":
         # Moneybird v2: firstname (no underscore!), company_name, tax_number, address1, zipcode
@@ -529,8 +549,15 @@ async def universal_import(
                 name=norm["name"] or f"Klant {norm['ext_id']}",
                 email=norm["email"] or None,
                 btw=norm["vat"] or None,
+                kvk=norm.get("kvk") or None,
                 address=norm["address"] or None,
                 city=norm["city"] or None,
+                phone=norm.get("phone") or None,
+                zip=norm.get("zip") or None,
+                state=norm.get("state") or None,
+                country=norm.get("country") or None,
+                website=norm.get("website") or None,
+                extra=norm.get("extra") or None,
                 payment_term=30,
                 source=provider,
                 source_id=norm["ext_id"],

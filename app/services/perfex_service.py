@@ -87,9 +87,68 @@ class PerfexCRMClient:
         except Exception as e:
             return {"status": "error", "message": f"Verbinding mislukt: {str(e)[:200]}"}
 
+    # Short common letters that cover virtually every Dutch company name, used
+    # to fan out the /search endpoint when the bulk /<resource> endpoint isn't
+    # available on a given Perfex install (the documented Themesic REST API
+    # only exposes /:id and /search/:keysearch for most resources).
+    _SEARCH_ALPHABET = [
+        "a", "b", "c", "d", "e", "f", "g", "h", "i", "j",
+        "k", "l", "m", "n", "o", "p", "q", "r", "s", "t",
+        "u", "v", "w", "x", "y", "z",
+        "0", "1", "2", "3", "4", "5", "6", "7", "8", "9",
+    ]
+
+    async def _try_bulk_list(self, resource: str) -> list[dict]:
+        """Try the undocumented `GET /api/<resource>` bulk list first.
+
+        Many Perfex installs still return the full list there, so it's always
+        worth a single call before the expensive fan-out. Returns [] if the
+        endpoint 404s or responds with `{status: false}`.
+        """
+        try:
+            data = await self._get(resource)
+        except Exception as e:
+            logger.debug(f"Perfex bulk {resource} failed: {e}")
+            return []
+        lst = self._as_list(data)
+        return [r for r in lst if isinstance(r, dict)]
+
+    async def _list_via_search(self, resource: str, id_field: str) -> list[dict]:
+        """Fan out /search/<letter> across a-z + 0-9 and dedupe by id.
+
+        Slower than a bulk call but works on every Perfex install because
+        /search is documented. `id_field` is the per-resource primary key
+        (e.g. "userid" for customers, "id" for invoices).
+        """
+        seen: dict[str, dict] = {}
+        for term in self._SEARCH_ALPHABET:
+            try:
+                data = await self._get(f"{resource}/search/{term}")
+            except Exception as e:
+                logger.debug(f"Perfex search {resource}/{term} failed: {e}")
+                continue
+            for row in self._as_list(data):
+                if not isinstance(row, dict):
+                    continue
+                rid = str(row.get(id_field) or row.get("id") or "")
+                if rid and rid not in seen:
+                    seen[rid] = row
+        return list(seen.values())
+
+    async def _list_all(self, resource: str, id_field: str = "id") -> list[dict]:
+        """Return every record of a Perfex resource.
+
+        Prefers the bulk endpoint for speed and falls back to /search
+        iteration for installs that don't expose one.
+        """
+        bulk = await self._try_bulk_list(resource)
+        if bulk:
+            return bulk
+        return await self._list_via_search(resource, id_field)
+
     # ---- Customers ----
     async def get_customers(self) -> list[dict]:
-        return self._as_list(await self._get("customers"))
+        return await self._list_all("customers", id_field="userid")
 
     async def get_customer(self, customer_id: str | int) -> dict:
         data = await self._get(f"customers/{customer_id}")
@@ -97,16 +156,26 @@ class PerfexCRMClient:
             return data[0]
         return data if isinstance(data, dict) else {}
 
+    async def search_customers(self, keyword: str) -> list[dict]:
+        return self._as_list(await self._get(f"customers/search/{keyword}"))
+
     async def create_customer(self, customer: dict) -> dict:
         return await self._post("customers", json=customer)
+
+    async def delete_customer(self, customer_id: str | int) -> dict:
+        # Perfex requires the /delete/ prefix for customers/items/leads/projects/tasks/tickets.
+        return await self._delete(f"delete/customers/{customer_id}")
 
     # ---- Contacts (per customer) ----
     async def get_customer_contacts(self, customer_id: str | int) -> list[dict]:
         return self._as_list(await self._get(f"contacts/{customer_id}"))
 
+    async def search_contacts(self, keyword: str) -> list[dict]:
+        return self._as_list(await self._get(f"contacts/search/{keyword}"))
+
     # ---- Invoices ----
     async def get_invoices(self) -> list[dict]:
-        return self._as_list(await self._get("invoices"))
+        return await self._list_all("invoices", id_field="id")
 
     async def get_invoice(self, invoice_id: str | int) -> dict:
         data = await self._get(f"invoices/{invoice_id}")
@@ -114,48 +183,67 @@ class PerfexCRMClient:
             return data[0]
         return data if isinstance(data, dict) else {}
 
+    async def search_invoices(self, keyword: str) -> list[dict]:
+        return self._as_list(await self._get(f"invoices/search/{keyword}"))
+
     async def create_invoice(self, invoice: dict) -> dict:
         return await self._post("invoices", json=invoice)
 
     # ---- Payments ----
     async def get_payments(self) -> list[dict]:
-        return self._as_list(await self._get("payments"))
+        return await self._list_all("payments", id_field="id")
+
+    async def get_payment(self, payment_id: str | int) -> dict:
+        data = await self._get(f"payments/{payment_id}")
+        return data if isinstance(data, dict) else {}
 
     # ---- Estimates ----
     async def get_estimates(self) -> list[dict]:
-        return self._as_list(await self._get("estimates"))
+        return await self._list_all("estimates", id_field="id")
+
+    async def get_estimate(self, estimate_id: str | int) -> dict:
+        data = await self._get(f"estimates/{estimate_id}")
+        return data if isinstance(data, dict) else {}
 
     # ---- Proposals ----
     async def get_proposals(self) -> list[dict]:
-        return self._as_list(await self._get("proposals"))
+        return await self._list_all("proposals", id_field="id")
 
     # ---- Credit notes ----
     async def get_credit_notes(self) -> list[dict]:
-        return self._as_list(await self._get("credit_notes"))
+        return await self._list_all("credit_notes", id_field="id")
+
+    async def get_credit_note(self, cn_id: str | int) -> dict:
+        data = await self._get(f"credit_notes/{cn_id}")
+        return data if isinstance(data, dict) else {}
 
     # ---- Subscriptions ----
     async def get_subscriptions(self) -> list[dict]:
-        return self._as_list(await self._get("subscriptions"))
+        return await self._list_all("subscriptions", id_field="id")
 
     # ---- Leads ----
     async def get_leads(self) -> list[dict]:
-        return self._as_list(await self._get("leads"))
+        return await self._list_all("leads", id_field="id")
 
     # ---- Projects ----
     async def get_projects(self) -> list[dict]:
-        return self._as_list(await self._get("projects"))
+        return await self._list_all("projects", id_field="id")
 
     # ---- Items (catalog) ----
     async def get_items(self) -> list[dict]:
-        return self._as_list(await self._get("items"))
+        return await self._list_all("items", id_field="itemid")
 
     # ---- Tickets ----
     async def get_tickets(self) -> list[dict]:
-        return self._as_list(await self._get("tickets"))
+        return await self._list_all("tickets", id_field="ticketid")
 
     # ---- Contracts ----
     async def get_contracts(self) -> list[dict]:
-        return self._as_list(await self._get("contracts"))
+        return await self._list_all("contracts", id_field="id")
+
+    # ---- Expenses ----
+    async def get_expenses(self) -> list[dict]:
+        return await self._list_all("expenses", id_field="id")
 
     # ---- Full Sync ----
     async def sync_all(self) -> dict:

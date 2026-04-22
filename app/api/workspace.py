@@ -564,6 +564,11 @@ async def create_debtor(data: dict, user: User = Depends(get_current_user), db: 
         kvk=data.get("kvk"), btw=data.get("btw"),
         iban=data.get("iban"), payment_term=int(data.get("paymentTerm", 30)),
         address=data.get("address"), city=data.get("city"),
+        phone=data.get("phone"),
+        zip=data.get("zip"),
+        state=data.get("state"),
+        country=data.get("country"),
+        website=data.get("website"),
     )
     db.add(d)
     await db.flush()
@@ -603,6 +608,12 @@ def _deb_to_dict(d: Debtor) -> dict:
         "id": str(d.id), "name": d.name, "email": d.email or "",
         "kvk": d.kvk or "", "btw": d.btw or "", "iban": d.iban or "",
         "paymentTerm": d.payment_term, "address": d.address or "", "city": d.city or "",
+        "phone": getattr(d, 'phone', None) or "",
+        "zip": getattr(d, 'zip', None) or "",
+        "state": getattr(d, 'state', None) or "",
+        "country": getattr(d, 'country', None) or "",
+        "website": getattr(d, 'website', None) or "",
+        "extra": getattr(d, 'extra', None) or None,
         "source": getattr(d, 'source', 'manual') or 'manual',
         "sourceId": getattr(d, 'source_id', None),
     }
