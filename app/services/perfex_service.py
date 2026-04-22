@@ -78,10 +78,35 @@ class PerfexCRMClient:
 
     # ---- Test Connection ----
     async def test_connection(self) -> dict:
+        """Verify the URL + authtoken reach a live Perfex REST API.
+
+        Tries the bulk `customers` endpoint first for a quick "N customers
+        found" response; if the install doesn't expose it (returns empty)
+        falls back to `customers/search/a` which is part of the documented
+        Themesic REST API and proves auth works regardless of whether the
+        undocumented bulk route is configured.
+        """
         try:
-            data = await self._get("customers")
-            count = len(self._as_list(data))
-            return {"status": "connected", "message": f"Verbonden met Perfex CRM ({count} klanten)", "customer_count": count}
+            bulk = self._as_list(await self._get("customers"))
+            if bulk:
+                return {
+                    "status": "connected",
+                    "message": f"Verbonden met Perfex CRM ({len(bulk)} klanten gevonden via /customers)",
+                    "customer_count": len(bulk),
+                }
+            # Empty bulk — could mean "no customers" or "bulk endpoint missing".
+            # A documented search call disambiguates: if it responds OK (even
+            # with 0 results) the authtoken is valid.
+            probe = self._as_list(await self._get("customers/search/a"))
+            return {
+                "status": "connected",
+                "message": (
+                    f"Verbonden met Perfex CRM (auth werkt; zoekopdracht 'a' vond {len(probe)} klanten). "
+                    "De bulk /customers route was leeg of is niet beschikbaar op deze install — "
+                    "de live sync gebruikt /search voor paginering."
+                ),
+                "customer_count": len(probe),
+            }
         except PermissionError:
             return {"status": "error", "message": "Ongeldige authtoken"}
         except Exception as e:
