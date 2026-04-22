@@ -654,3 +654,290 @@ async def universal_import(
     await db.flush()
 
     return {"provider": provider, "results": results}
+
+
+# ============================================================
+# Progressive / chunked sync — preferred over the one-shot import above.
+# The client drives the loop: each tick processes one small batch so the
+# Perfex / Moneybird / WeFact API (and our own DB) never gets hit with a
+# huge single request. Intended for live sync buttons in the UI.
+# ============================================================
+
+# The Perfex REST API only exposes /search/:keyword as a list endpoint, so we
+# fan out across single-character searches and dedupe by id. Keeping the
+# alphabet here mirrors PerfexCRMClient._SEARCH_ALPHABET for predictable
+# progress reporting.
+_SEARCH_ALPHABET = list("abcdefghijklmnopqrstuvwxyz0123456789")
+
+
+@router.post("/universal/{provider}/tick")
+async def universal_sync_tick(
+    provider: str,
+    body: dict | None = None,
+    company_id: str | None = None,
+    user: User = Depends(_require_manager),
+    db: AsyncSession = Depends(get_db),
+):
+    """Process one chunk of a progressive sync and return an opaque cursor
+    for the next chunk. The frontend is expected to loop until `done=true`.
+
+    Body (all optional):
+      - cursor: string from the previous tick response (empty on first call)
+      - chunk_size: max records to hydrate + upsert per tick (default 15)
+
+    Returns:
+      - done: bool
+      - cursor: string — pass back verbatim on the next tick
+      - phase: 'customers' | 'invoices' | 'done'
+      - progress: {customers: {created, skipped, seen}, invoices: {created, skipped, seen}}
+      - message: short human label for the progress bar
+    """
+    import json as _json
+
+    body = body or {}
+    chunk_size = max(1, min(int(body.get("chunk_size") or 15), 50))
+    cursor_raw = body.get("cursor") or ""
+
+    # Resolve company + connection (same auth rules as the one-shot import).
+    resolved = await _resolve_company_id(user, company_id, db)
+    if not resolved:
+        raise HTTPException(status_code=400, detail="Geen bedrijf gekoppeld aan je account")
+
+    conn_result = await db.execute(
+        select(IntegrationConnection).where(
+            IntegrationConnection.company_id == resolved,
+            IntegrationConnection.provider == provider,
+        )
+    )
+    conn = conn_result.scalar_one_or_none()
+    if not conn:
+        raise HTTPException(status_code=404, detail=f"Geen {provider} koppeling gevonden voor dit bedrijf")
+
+    try:
+        client = get_client(provider, conn.credentials)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+    # The letter-based fan-out matches Perfex's /search/:keyword API. Other
+    # providers (Moneybird, WeFact, …) have their own pagination; those keep
+    # using the one-shot /universal/{provider} endpoint for now.
+    if provider != "perfex":
+        raise HTTPException(
+            status_code=400,
+            detail="Progressive sync is voorlopig alleen beschikbaar voor Perfex. "
+                   "Gebruik /import/universal/{provider} voor andere providers.",
+        )
+
+    # --- Cursor state machine ---
+    # phase: where we are ('customers' → 'invoices' → 'done')
+    # letter_idx: position in _SEARCH_ALPHABET for the current phase
+    # seen_ids: list of ids we've already upserted in this run (dedup across letters)
+    # progress: rolling counts we return each tick
+    if cursor_raw:
+        try:
+            state = _json.loads(cursor_raw)
+        except Exception:
+            raise HTTPException(status_code=400, detail="Ongeldige cursor")
+    else:
+        state = {
+            "phase": "customers",
+            "letter_idx": 0,
+            "seen_ids": [],
+            "progress": {
+                "customers": {"created": 0, "skipped": 0, "seen": 0},
+                "invoices": {"created": 0, "skipped": 0, "seen": 0},
+            },
+            "customer_names": {},
+        }
+
+    progress = state["progress"]
+    seen_ids = set(state.get("seen_ids") or [])
+    phase = state["phase"]
+
+    if phase == "done":
+        return {"done": True, "cursor": "", "phase": "done", "progress": progress, "message": "Klaar"}
+
+    # Collect up to chunk_size NEW records by advancing through the alphabet.
+    batch: list[dict] = []
+    while len(batch) < chunk_size and state["letter_idx"] < len(_SEARCH_ALPHABET):
+        letter = _SEARCH_ALPHABET[state["letter_idx"]]
+        try:
+            if phase == "customers":
+                rows = await client._client().search_customers(letter) if hasattr(client, "_client") else []
+            elif phase == "invoices":
+                rows = await client._client().search_invoices(letter) if hasattr(client, "_client") else []
+            else:
+                rows = []
+        except Exception as e:
+            logger.warning(f"{provider} search/{letter} for {phase} failed: {e}")
+            rows = []
+
+        for r in rows:
+            if not isinstance(r, dict):
+                continue
+            rid_field = "userid" if phase == "customers" else "id"
+            rid = str(r.get(rid_field) or r.get("id") or "")
+            if not rid or rid in seen_ids:
+                continue
+            seen_ids.add(rid)
+            batch.append(r)
+            if len(batch) >= chunk_size:
+                break
+
+        # Move on to the next letter only once we've drained this one.
+        if len(batch) < chunk_size:
+            state["letter_idx"] += 1
+
+    # --- Hydrate + upsert this batch ---
+    if phase == "customers":
+        for raw in batch:
+            uid = str(raw.get("userid") or raw.get("id") or "")
+            try:
+                detail = await client._client().get_customer(uid)
+                merged = {**raw, **(detail or {})}
+            except Exception:
+                merged = raw
+
+            norm = _normalize_customer(provider, merged)
+            if not norm["ext_id"]:
+                continue
+            state["customer_names"][norm["ext_id"]] = norm["name"]
+            progress["customers"]["seen"] += 1
+
+            existing = await db.execute(
+                select(Debtor).where(
+                    Debtor.company_id == resolved,
+                    Debtor.source == provider,
+                    Debtor.source_id == norm["ext_id"],
+                )
+            )
+            if existing.scalar_one_or_none():
+                progress["customers"]["skipped"] += 1
+                continue
+
+            db.add(Debtor(
+                id=uuid.uuid4(),
+                company_id=resolved,
+                name=norm["name"] or f"Klant {norm['ext_id']}",
+                email=norm["email"] or None,
+                btw=norm["vat"] or None,
+                kvk=norm.get("kvk") or None,
+                address=norm["address"] or None,
+                city=norm["city"] or None,
+                phone=norm.get("phone") or None,
+                zip=norm.get("zip") or None,
+                state=norm.get("state") or None,
+                country=norm.get("country") or None,
+                website=norm.get("website") or None,
+                extra=norm.get("extra") or None,
+                payment_term=30,
+                source=provider,
+                source_id=norm["ext_id"],
+            ))
+            progress["customers"]["created"] += 1
+
+    elif phase == "invoices":
+        for raw in batch:
+            iid = str(raw.get("id") or "")
+            try:
+                detail = await client._client().get_invoice(iid)
+                merged = {**raw, **(detail or {})}
+            except Exception:
+                merged = raw
+
+            norm = _normalize_invoice(provider, merged, state.get("customer_names") or {})
+            if not norm["ext_id"]:
+                continue
+            progress["invoices"]["seen"] += 1
+
+            existing = await db.execute(
+                select(Invoice).where(
+                    Invoice.company_id == resolved,
+                    Invoice.source == provider,
+                    Invoice.source_id == norm["ext_id"],
+                )
+            )
+            if existing.scalar_one_or_none():
+                progress["invoices"]["skipped"] += 1
+                continue
+
+            btw_rate = norm["btw_rate"]
+            if abs(btw_rate - 21) < 3:
+                btw_rate = 21
+            elif abs(btw_rate - 9) < 3:
+                btw_rate = 9
+            elif abs(btw_rate) < 2:
+                btw_rate = 0
+
+            invoice_lines = norm.get("lines") or []
+            if not invoice_lines:
+                invoice_lines = [{
+                    "desc": f"{norm['number'] or provider}",
+                    "qty": 1,
+                    "price": round(norm["subtotal"], 2),
+                    "btwRate": btw_rate,
+                }]
+            else:
+                for line in invoice_lines:
+                    line["price"] = round(line["price"], 2)
+                    lr = line.get("btwRate", btw_rate)
+                    if abs(lr - 21) < 3:
+                        line["btwRate"] = 21
+                    elif abs(lr - 9) < 3:
+                        line["btwRate"] = 9
+                    elif abs(lr) < 2:
+                        line["btwRate"] = 0
+
+            db.add(Invoice(
+                id=uuid.uuid4(),
+                company_id=resolved,
+                number=norm["number"] or f"{provider.upper()}-{norm['ext_id']}",
+                client=norm["client"] or f"Klant {norm['client_id']}",
+                client_id=norm["client_id"],
+                date=_safe_date(norm["date"]),
+                due_date=_safe_date(norm["due_date"]),
+                lines=invoice_lines,
+                status=norm["status"],
+                notes=norm["notes"] or None,
+                source=provider,
+                source_id=norm["ext_id"],
+            ))
+            progress["invoices"]["created"] += 1
+
+    await db.flush()
+
+    # Advance the phase machine when we've exhausted the alphabet.
+    done = False
+    if state["letter_idx"] >= len(_SEARCH_ALPHABET):
+        if phase == "customers":
+            state["phase"] = "invoices"
+            state["letter_idx"] = 0
+            # Wipe per-phase dedup — invoice ids don't clash with customer ids
+            seen_ids = set()
+        elif phase == "invoices":
+            state["phase"] = "done"
+            done = True
+
+    state["seen_ids"] = list(seen_ids)
+
+    # Persist last_sync_at + running totals on the connection so the UI can
+    # show "laatste sync X minuten geleden" between runs.
+    conn.last_sync_at = datetime.utcnow()
+    conn.metadata_json = {
+        **(conn.metadata_json or {}),
+        "last_sync_progress": progress,
+    }
+    await db.flush()
+
+    message = "Klaar" if done else (
+        f"{state['phase'].capitalize()}: {progress[state['phase']]['seen']} gezien, "
+        f"{progress[state['phase']]['created']} nieuw, {progress[state['phase']]['skipped']} bestaand"
+    )
+
+    return {
+        "done": done,
+        "cursor": "" if done else _json.dumps(state),
+        "phase": state["phase"],
+        "progress": progress,
+        "message": message,
+    }

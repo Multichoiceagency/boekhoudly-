@@ -136,7 +136,16 @@ async def create_or_update_connection(
     conn = existing.scalar_one_or_none()
 
     if conn:
-        conn.credentials = credentials
+        # Merge instead of replace — the frontend blanks secret fields
+        # (api_key, token, password) on the edit form so a plain assign would
+        # wipe the stored JWT authtoken as soon as the user tweaks e.g. the
+        # URL. An incoming empty value means "keep the existing one"; an
+        # incoming non-empty value overrides.
+        merged = dict(conn.credentials or {})
+        for k, v in credentials.items():
+            if v not in (None, ""):
+                merged[k] = v
+        conn.credentials = merged
         if "name" in data:
             conn.name = data["name"]
         conn.status = "unknown"
