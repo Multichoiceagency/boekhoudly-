@@ -30,6 +30,42 @@ def _company_id(user: User) -> uuid.UUID | None:
     return user.company_id
 
 
+async def _assert_company_access(
+    user: User,
+    entity_company_id: uuid.UUID | None,
+    db: AsyncSession,
+) -> None:
+    """Raise 403 if the user cannot touch a record belonging to
+    `entity_company_id`. Admins pass through; accountants must own it via
+    CompanySubscription; regular users must match exactly.
+
+    Needed because mutation endpoints look up entities by their own UUID
+    (e.g. /invoices/{id}) and previously did no tenant check — any
+    authenticated user could mutate any record if they learned the UUID.
+    """
+    if entity_company_id is None:
+        # Legacy rows without a company — allow admin only.
+        if user.role != "admin":
+            raise HTTPException(status_code=403, detail="Geen toegang tot dit bedrijf")
+        return
+    if user.role == "admin":
+        return
+    if user.role == "accountant":
+        from app.models.company_subscription import CompanySubscription
+        result = await db.execute(
+            select(CompanySubscription).where(
+                CompanySubscription.company_id == entity_company_id,
+                CompanySubscription.accountant_id == user.id,
+            )
+        )
+        if result.scalar_one_or_none() or user.company_id == entity_company_id:
+            return
+        raise HTTPException(status_code=403, detail="Geen toegang tot dit bedrijf")
+    if user.company_id == entity_company_id:
+        return
+    raise HTTPException(status_code=403, detail="Geen toegang tot dit bedrijf")
+
+
 async def _resolve_company_id(
     user: User,
     requested_id: str | None,
@@ -316,6 +352,7 @@ async def update_invoice(invoice_id: str, data: dict, user: User = Depends(get_c
     inv = result.scalar_one_or_none()
     if not inv:
         raise HTTPException(status_code=404, detail="Factuur niet gevonden")
+    await _assert_company_access(user, inv.company_id, db)
     for k, v in data.items():
         col = {"clientId": "client_id", "dueDate": "due_date", "paidDate": "paid_date"}.get(k, k)
         if col in ("date", "due_date", "paid_date"):
@@ -328,7 +365,13 @@ async def update_invoice(invoice_id: str, data: dict, user: User = Depends(get_c
 
 @router.delete("/invoices/{invoice_id}")
 async def delete_invoice(invoice_id: str, user: User = Depends(get_current_user), db: AsyncSession = Depends(get_db)):
-    await db.execute(delete(Invoice).where(Invoice.id == invoice_id))
+    result = await db.execute(select(Invoice).where(Invoice.id == invoice_id))
+    inv = result.scalar_one_or_none()
+    if not inv:
+        return {"ok": True}
+    await _assert_company_access(user, inv.company_id, db)
+    await db.delete(inv)
+    await db.flush()
     return {"ok": True}
 
 
@@ -380,6 +423,7 @@ async def update_expense(expense_id: str, data: dict, user: User = Depends(get_c
     exp = result.scalar_one_or_none()
     if not exp:
         raise HTTPException(status_code=404, detail="Uitgave niet gevonden")
+    await _assert_company_access(user, exp.company_id, db)
     mapping = {"btwRate": "btw_rate", "supplierId": "supplier_id"}
     for k, v in data.items():
         col = mapping.get(k, k)
@@ -395,7 +439,13 @@ async def update_expense(expense_id: str, data: dict, user: User = Depends(get_c
 
 @router.delete("/expenses/{expense_id}")
 async def delete_expense(expense_id: str, user: User = Depends(get_current_user), db: AsyncSession = Depends(get_db)):
-    await db.execute(delete(Expense).where(Expense.id == expense_id))
+    result = await db.execute(select(Expense).where(Expense.id == expense_id))
+    exp = result.scalar_one_or_none()
+    if not exp:
+        return {"ok": True}
+    await _assert_company_access(user, exp.company_id, db)
+    await db.delete(exp)
+    await db.flush()
     return {"ok": True}
 
 
@@ -441,6 +491,7 @@ async def update_debtor(debtor_id: str, data: dict, user: User = Depends(get_cur
     d = result.scalar_one_or_none()
     if not d:
         raise HTTPException(status_code=404, detail="Debiteur niet gevonden")
+    await _assert_company_access(user, d.company_id, db)
     mapping = {"paymentTerm": "payment_term"}
     for k, v in data.items():
         col = mapping.get(k, k)
@@ -452,7 +503,13 @@ async def update_debtor(debtor_id: str, data: dict, user: User = Depends(get_cur
 
 @router.delete("/debtors/{debtor_id}")
 async def delete_debtor(debtor_id: str, user: User = Depends(get_current_user), db: AsyncSession = Depends(get_db)):
-    await db.execute(delete(Debtor).where(Debtor.id == debtor_id))
+    result = await db.execute(select(Debtor).where(Debtor.id == debtor_id))
+    d = result.scalar_one_or_none()
+    if not d:
+        return {"ok": True}
+    await _assert_company_access(user, d.company_id, db)
+    await db.delete(d)
+    await db.flush()
     return {"ok": True}
 
 
@@ -495,7 +552,13 @@ async def create_creditor(data: dict, user: User = Depends(get_current_user), db
 
 @router.delete("/creditors/{creditor_id}")
 async def delete_creditor(creditor_id: str, user: User = Depends(get_current_user), db: AsyncSession = Depends(get_db)):
-    await db.execute(delete(Creditor).where(Creditor.id == creditor_id))
+    result = await db.execute(select(Creditor).where(Creditor.id == creditor_id))
+    c = result.scalar_one_or_none()
+    if not c:
+        return {"ok": True}
+    await _assert_company_access(user, c.company_id, db)
+    await db.delete(c)
+    await db.flush()
     return {"ok": True}
 
 
@@ -541,6 +604,7 @@ async def update_bank_transaction(tx_id: str, data: dict, user: User = Depends(g
     t = result.scalar_one_or_none()
     if not t:
         raise HTTPException(status_code=404, detail="Transactie niet gevonden")
+    await _assert_company_access(user, t.company_id, db)
     mapping = {"matchedInvoiceId": "matched_invoice_id", "matchedExpenseId": "matched_expense_id"}
     for k, v in data.items():
         col = mapping.get(k, k)
@@ -610,6 +674,7 @@ async def convert_offerte_to_invoice(offerte_id: str, user: User = Depends(get_c
     offerte = result.scalar_one_or_none()
     if not offerte or offerte.document_type != "offerte":
         raise HTTPException(status_code=404, detail="Offerte niet gevonden")
+    await _assert_company_access(user, offerte.company_id, db)
 
     # Mark offerte as converted
     offerte.status = "omgezet"
@@ -667,6 +732,7 @@ async def create_creditnota_from_invoice(invoice_id: str, user: User = Depends(g
     orig = result.scalar_one_or_none()
     if not orig:
         raise HTTPException(status_code=404, detail="Factuur niet gevonden")
+    await _assert_company_access(user, orig.company_id, db)
 
     # Negate amounts
     neg_lines = [
@@ -721,6 +787,7 @@ async def update_product(product_id: str, data: dict, user: User = Depends(get_c
     p = result.scalar_one_or_none()
     if not p:
         raise HTTPException(status_code=404, detail="Product niet gevonden")
+    await _assert_company_access(user, p.company_id, db)
     mapping = {"btwRate": "btw_rate", "isActive": "is_active", "sortOrder": "sort_order"}
     for k, v in data.items():
         col = mapping.get(k, k)
@@ -734,7 +801,13 @@ async def update_product(product_id: str, data: dict, user: User = Depends(get_c
 
 @router.delete("/producten/{product_id}")
 async def delete_product(product_id: str, user: User = Depends(get_current_user), db: AsyncSession = Depends(get_db)):
-    await db.execute(delete(Product).where(Product.id == product_id))
+    result = await db.execute(select(Product).where(Product.id == product_id))
+    p = result.scalar_one_or_none()
+    if not p:
+        return {"ok": True}
+    await _assert_company_access(user, p.company_id, db)
+    await db.delete(p)
+    await db.flush()
     return {"ok": True}
 
 
