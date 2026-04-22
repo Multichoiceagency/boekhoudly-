@@ -117,7 +117,7 @@ async def list_companies(user: User = Depends(get_current_user), db: AsyncSessio
     from app.models.company_subscription import CompanySubscription
 
     if user.role == "admin":
-        result = await db.execute(select(Company).order_by(Company.created_at.desc()))
+        result = await db.execute(select(Company).order_by(Company.sort_order, Company.created_at.desc()))
         companies = result.scalars().all()
     elif user.role == "accountant":
         sub_result = await db.execute(
@@ -128,7 +128,7 @@ async def list_companies(user: User = Depends(get_current_user), db: AsyncSessio
             ids.append(user.company_id)
         if not ids:
             return []
-        result = await db.execute(select(Company).where(Company.id.in_(ids)).order_by(Company.created_at.desc()))
+        result = await db.execute(select(Company).where(Company.id.in_(ids)).order_by(Company.sort_order, Company.created_at.desc()))
         companies = result.scalars().all()
     else:
         if not user.company_id:
@@ -148,6 +148,15 @@ async def create_company(data: dict, user: User = Depends(get_current_user), db:
     from app.models.company_subscription import CompanySubscription
     from datetime import date
 
+    # Parse parentId — accept empty string / None gracefully
+    parent_id = None
+    pid_raw = data.get("parentId") or data.get("parent_id")
+    if pid_raw:
+        try:
+            parent_id = uuid.UUID(str(pid_raw))
+        except (ValueError, TypeError):
+            parent_id = None
+
     c = Company(
         id=uuid.uuid4(),
         name=data.get("name", ""),
@@ -161,6 +170,8 @@ async def create_company(data: dict, user: User = Depends(get_current_user), db:
         industry=data.get("activiteiten"),
         company_type=data.get("type"),
         primary_color=data.get("primaryColor", "#059669"),
+        parent_id=parent_id,
+        sort_order=int(data.get("sortOrder") or data.get("sort_order") or 0),
     )
     db.add(c)
     await db.flush()
@@ -204,6 +215,7 @@ async def update_company(company_id: str, data: dict, user: User = Depends(get_c
     c = result.scalar_one_or_none()
     if not c:
         raise HTTPException(status_code=404, detail="Bedrijf niet gevonden")
+    await _assert_company_access(user, c.id, db)
     for field in ["name", "kvk_number", "btw_number", "address", "city", "postal_code", "iban", "phone", "industry", "company_type", "primary_color", "logo_url"]:
         if field in data:
             setattr(c, field, data[field])
@@ -229,8 +241,78 @@ async def update_company(company_id: str, data: dict, user: User = Depends(get_c
         settings = c.settings or {}
         settings["email"] = data["email"]
         c.settings = settings
+    # Parent / sort order — used by the DnD tree on /bedrijven. Accept both
+    # camelCase and snake_case payloads. Guard against self-parenting and
+    # direct cycles (A→B→A); deeper cycles require a full walk but are
+    # blocked by the frontend which has the full tree.
+    if "parentId" in data or "parent_id" in data:
+        pid_raw = data.get("parentId") if "parentId" in data else data.get("parent_id")
+        if not pid_raw:
+            c.parent_id = None
+        else:
+            try:
+                pid = uuid.UUID(str(pid_raw))
+            except (ValueError, TypeError):
+                raise HTTPException(status_code=400, detail="Ongeldig parentId")
+            if pid == c.id:
+                raise HTTPException(status_code=400, detail="Bedrijf kan geen ouder zijn van zichzelf")
+            c.parent_id = pid
+    if "sortOrder" in data or "sort_order" in data:
+        so_raw = data.get("sortOrder") if "sortOrder" in data else data.get("sort_order")
+        try:
+            c.sort_order = int(so_raw or 0)
+        except (ValueError, TypeError):
+            pass
     await db.flush()
     return _company_to_dict(c)
+
+
+@router.post("/companies/reorder")
+async def reorder_companies(data: dict, user: User = Depends(get_current_user), db: AsyncSession = Depends(get_db)):
+    """Bulk apply parent/sort order updates from the DnD tree on /bedrijven.
+
+    Body: `{"updates": [{"id": "<uuid>", "parentId": "<uuid|null>", "sortOrder": 0}, ...]}`
+
+    One endpoint so the whole tree lands atomically — avoids the stutter of
+    N individual PUTs firing in parallel while the user drops a card.
+    """
+    updates = data.get("updates")
+    if not isinstance(updates, list) or not updates:
+        raise HTTPException(status_code=400, detail="Lege of ongeldige updates lijst")
+
+    ids = [u.get("id") for u in updates if u.get("id")]
+    if not ids:
+        raise HTTPException(status_code=400, detail="Ontbrekende id in updates")
+
+    rows = (await db.execute(select(Company).where(Company.id.in_(ids)))).scalars().all()
+    by_id = {str(c.id): c for c in rows}
+
+    for u in updates:
+        cid = str(u.get("id"))
+        c = by_id.get(cid)
+        if not c:
+            continue
+        await _assert_company_access(user, c.id, db)
+        pid_raw = u.get("parentId", "__missing__")
+        if pid_raw != "__missing__":
+            if not pid_raw:
+                c.parent_id = None
+            else:
+                try:
+                    pid = uuid.UUID(str(pid_raw))
+                    if pid == c.id:
+                        raise HTTPException(status_code=400, detail=f"{c.name}: eigen ouder")
+                    c.parent_id = pid
+                except (ValueError, TypeError):
+                    raise HTTPException(status_code=400, detail=f"Ongeldig parentId voor {c.name}")
+        if "sortOrder" in u:
+            try:
+                c.sort_order = int(u.get("sortOrder") or 0)
+            except (ValueError, TypeError):
+                pass
+
+    await db.flush()
+    return {"ok": True, "count": len(rows)}
 
 
 @router.delete("/companies/{company_id}")
@@ -306,7 +388,10 @@ def _company_to_dict(c: Company) -> dict:
     return {
         "id": str(c.id), "name": c.name or "", "type": c.company_type or "",
         "kvk": c.kvk_number or "", "btw": c.btw_number or "",
-        "activiteiten": c.industry or "", "parentId": None, "agents": [],
+        "activiteiten": c.industry or "",
+        "parentId": str(c.parent_id) if c.parent_id else None,
+        "sortOrder": c.sort_order or 0,
+        "agents": [],
         "branding": {
             "logo": c.logo_url, "primaryColor": c.primary_color or "#059669",
             "companyName": c.name or "", "address": c.address or "",

@@ -1,6 +1,6 @@
 import uuid
 from datetime import datetime
-from sqlalchemy import String, DateTime, Text
+from sqlalchemy import String, DateTime, Text, Integer, ForeignKey
 from app.models.compat import GUID as UUID, JSONB
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 from app.database import Base
@@ -26,6 +26,13 @@ class Company(Base):
     logo_url: Mapped[str | None] = mapped_column(Text, nullable=True)  # Can hold base64 data URLs
     primary_color: Mapped[str | None] = mapped_column(String(7), nullable=True)  # "#059669"
     settings: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
+
+    # Hierarchy: a company can be a sub-company of another (holding → werk-BV).
+    # parent_id=NULL marks a root. sort_order orders siblings within the same
+    # parent (and roots among themselves). Both are editable via the drag-and-
+    # drop tree on /bedrijven.
+    parent_id: Mapped[uuid.UUID | None] = mapped_column(UUID, ForeignKey("companies.id", ondelete="SET NULL"), nullable=True)
+    sort_order: Mapped[int] = mapped_column(Integer, nullable=False, server_default="0")
 
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
 
