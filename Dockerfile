@@ -14,7 +14,11 @@ COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
 COPY . .
+RUN chmod +x /app/docker-entrypoint.sh
 
 EXPOSE 8000
 
-CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000"]
+# Run `alembic upgrade head` before booting uvicorn so schema changes land
+# before any endpoint is served. The entrypoint exec's uvicorn so it becomes
+# PID 1 and signals/graceful shutdown still work.
+ENTRYPOINT ["/app/docker-entrypoint.sh"]
