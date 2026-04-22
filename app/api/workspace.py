@@ -30,6 +30,42 @@ def _company_id(user: User) -> uuid.UUID | None:
     return user.company_id
 
 
+async def _resolve_company_id(
+    user: User,
+    requested_id: str | None,
+    db: AsyncSession,
+) -> uuid.UUID | None:
+    """Resolve the target company ID, validating access.
+
+    When the caller passes ?company_id=... (the company the UI is currently
+    viewing), this returns that company's UUID if the user is allowed to see
+    it. Without an override, falls back to the user's own home company.
+    """
+    if not requested_id:
+        return _company_id(user)
+    try:
+        cid = uuid.UUID(str(requested_id))
+    except (ValueError, TypeError):
+        raise HTTPException(status_code=400, detail="Ongeldig company_id")
+
+    if user.role == "admin":
+        return cid
+    if user.role == "accountant":
+        from app.models.company_subscription import CompanySubscription
+        result = await db.execute(
+            select(CompanySubscription).where(
+                CompanySubscription.company_id == cid,
+                CompanySubscription.accountant_id == user.id,
+            )
+        )
+        if result.scalar_one_or_none() or user.company_id == cid:
+            return cid
+        raise HTTPException(status_code=403, detail="Geen toegang tot dit bedrijf")
+    if user.company_id == cid:
+        return cid
+    raise HTTPException(status_code=403, detail="Geen toegang tot dit bedrijf")
+
+
 # ============================================================
 #  COMPANIES
 # ============================================================
@@ -171,6 +207,14 @@ async def delete_company(company_id: str, user: User = Depends(get_current_user)
     """
     from app.models.document import Document
     from app.models.company_subscription import CompanySubscription
+    from app.models.integration_connection import IntegrationConnection
+    from app.models.cloud_connection import CloudConnection
+    from app.models.bank_connection import BankConnection
+    from app.models.crm_cache import CrmRecord, CrmSyncRun
+    from app.models.ai_usage import AiUsage
+    from app.models.vat_report import VATReport
+    from app.models.transaction import Transaction
+    from app.models.ledger_entry import LedgerEntry
 
     result = await db.execute(select(Company).where(Company.id == company_id))
     c = result.scalar_one_or_none()
@@ -192,7 +236,17 @@ async def delete_company(company_id: str, user: User = Depends(get_current_user)
     else:
         raise HTTPException(status_code=403, detail="Geen rechten om bedrijven te verwijderen")
 
-    # Cascade deletes (no FK ON DELETE CASCADE is defined — do it explicitly)
+    # Cascade deletes (no FK ON DELETE CASCADE is defined — do it explicitly).
+    # Order matters: child rows first, then the company row itself.
+    await db.execute(delete(LedgerEntry).where(LedgerEntry.company_id == c.id))
+    await db.execute(delete(Transaction).where(Transaction.company_id == c.id))
+    await db.execute(delete(VATReport).where(VATReport.company_id == c.id))
+    await db.execute(delete(AiUsage).where(AiUsage.company_id == c.id))
+    await db.execute(delete(CrmRecord).where(CrmRecord.company_id == c.id))
+    await db.execute(delete(CrmSyncRun).where(CrmSyncRun.company_id == c.id))
+    await db.execute(delete(IntegrationConnection).where(IntegrationConnection.company_id == c.id))
+    await db.execute(delete(CloudConnection).where(CloudConnection.company_id == c.id))
+    await db.execute(delete(BankConnection).where(BankConnection.company_id == c.id))
     await db.execute(delete(Invoice).where(Invoice.company_id == c.id))
     await db.execute(delete(Expense).where(Expense.company_id == c.id))
     await db.execute(delete(Debtor).where(Debtor.company_id == c.id))
@@ -232,8 +286,8 @@ def _company_to_dict(c: Company) -> dict:
 #  INVOICES
 # ============================================================
 @router.get("/invoices")
-async def list_invoices(user: User = Depends(get_current_user), db: AsyncSession = Depends(get_db)):
-    cid = _company_id(user)
+async def list_invoices(company_id: str | None = None, user: User = Depends(get_current_user), db: AsyncSession = Depends(get_db)):
+    cid = await _resolve_company_id(user, company_id, db)
     q = select(Invoice).order_by(Invoice.date.desc())
     if cid:
         q = q.where(Invoice.company_id == cid)
@@ -243,7 +297,7 @@ async def list_invoices(user: User = Depends(get_current_user), db: AsyncSession
 
 @router.post("/invoices", status_code=201)
 async def create_invoice(data: dict, user: User = Depends(get_current_user), db: AsyncSession = Depends(get_db)):
-    cid = _company_id(user)
+    cid = await _resolve_company_id(user, data.get("companyId"), db)
     inv = Invoice(
         id=uuid.uuid4(), company_id=cid,
         number=data.get("number", ""), client=data.get("client", ""),
@@ -296,8 +350,8 @@ def _inv_to_dict(i: Invoice) -> dict:
 #  EXPENSES
 # ============================================================
 @router.get("/expenses")
-async def list_expenses(user: User = Depends(get_current_user), db: AsyncSession = Depends(get_db)):
-    cid = _company_id(user)
+async def list_expenses(company_id: str | None = None, user: User = Depends(get_current_user), db: AsyncSession = Depends(get_db)):
+    cid = await _resolve_company_id(user, company_id, db)
     q = select(Expense).order_by(Expense.date.desc())
     if cid:
         q = q.where(Expense.company_id == cid)
@@ -307,7 +361,7 @@ async def list_expenses(user: User = Depends(get_current_user), db: AsyncSession
 
 @router.post("/expenses", status_code=201)
 async def create_expense(data: dict, user: User = Depends(get_current_user), db: AsyncSession = Depends(get_db)):
-    cid = _company_id(user)
+    cid = await _resolve_company_id(user, data.get("companyId"), db)
     exp = Expense(
         id=uuid.uuid4(), company_id=cid,
         date=_parse_date(data.get("date")), description=data.get("description", ""),
@@ -357,8 +411,8 @@ def _exp_to_dict(e: Expense) -> dict:
 #  DEBTORS
 # ============================================================
 @router.get("/debtors")
-async def list_debtors(user: User = Depends(get_current_user), db: AsyncSession = Depends(get_db)):
-    cid = _company_id(user)
+async def list_debtors(company_id: str | None = None, user: User = Depends(get_current_user), db: AsyncSession = Depends(get_db)):
+    cid = await _resolve_company_id(user, company_id, db)
     q = select(Debtor).order_by(Debtor.name)
     if cid:
         q = q.where(Debtor.company_id == cid)
@@ -368,7 +422,7 @@ async def list_debtors(user: User = Depends(get_current_user), db: AsyncSession 
 
 @router.post("/debtors", status_code=201)
 async def create_debtor(data: dict, user: User = Depends(get_current_user), db: AsyncSession = Depends(get_db)):
-    cid = _company_id(user)
+    cid = await _resolve_company_id(user, data.get("companyId"), db)
     d = Debtor(
         id=uuid.uuid4(), company_id=cid,
         name=data.get("name", ""), email=data.get("email"),
@@ -416,8 +470,8 @@ def _deb_to_dict(d: Debtor) -> dict:
 #  CREDITORS
 # ============================================================
 @router.get("/creditors")
-async def list_creditors(user: User = Depends(get_current_user), db: AsyncSession = Depends(get_db)):
-    cid = _company_id(user)
+async def list_creditors(company_id: str | None = None, user: User = Depends(get_current_user), db: AsyncSession = Depends(get_db)):
+    cid = await _resolve_company_id(user, company_id, db)
     q = select(Creditor).order_by(Creditor.name)
     if cid:
         q = q.where(Creditor.company_id == cid)
@@ -427,7 +481,7 @@ async def list_creditors(user: User = Depends(get_current_user), db: AsyncSessio
 
 @router.post("/creditors", status_code=201)
 async def create_creditor(data: dict, user: User = Depends(get_current_user), db: AsyncSession = Depends(get_db)):
-    cid = _company_id(user)
+    cid = await _resolve_company_id(user, data.get("companyId"), db)
     c = Creditor(
         id=uuid.uuid4(), company_id=cid,
         name=data.get("name", ""), email=data.get("email"),
@@ -456,8 +510,8 @@ def _cred_to_dict(c: Creditor) -> dict:
 #  BANK TRANSACTIONS
 # ============================================================
 @router.get("/bank-transactions")
-async def list_bank_transactions(user: User = Depends(get_current_user), db: AsyncSession = Depends(get_db)):
-    cid = _company_id(user)
+async def list_bank_transactions(company_id: str | None = None, user: User = Depends(get_current_user), db: AsyncSession = Depends(get_db)):
+    cid = await _resolve_company_id(user, company_id, db)
     q = select(BankTransaction).order_by(BankTransaction.date.desc())
     if cid:
         q = q.where(BankTransaction.company_id == cid)
@@ -467,7 +521,7 @@ async def list_bank_transactions(user: User = Depends(get_current_user), db: Asy
 
 @router.post("/bank-transactions", status_code=201)
 async def create_bank_transaction(data: dict, user: User = Depends(get_current_user), db: AsyncSession = Depends(get_db)):
-    cid = _company_id(user)
+    cid = await _resolve_company_id(user, data.get("companyId"), db)
     t = BankTransaction(
         id=uuid.uuid4(), company_id=cid,
         date=_parse_date(data.get("date")), description=data.get("description", ""),
@@ -523,8 +577,8 @@ def _parse_date(val) -> date | None:
 #  OFFERTES (quotes) — document_type='offerte'
 # ============================================================
 @router.get("/offertes")
-async def list_offertes(user: User = Depends(get_current_user), db: AsyncSession = Depends(get_db)):
-    cid = _company_id(user)
+async def list_offertes(company_id: str | None = None, user: User = Depends(get_current_user), db: AsyncSession = Depends(get_db)):
+    cid = await _resolve_company_id(user, company_id, db)
     q = select(Invoice).where(Invoice.document_type == "offerte").order_by(Invoice.date.desc())
     if cid:
         q = q.where(Invoice.company_id == cid)
@@ -533,7 +587,7 @@ async def list_offertes(user: User = Depends(get_current_user), db: AsyncSession
 
 @router.post("/offertes", status_code=201)
 async def create_offerte(data: dict, user: User = Depends(get_current_user), db: AsyncSession = Depends(get_db)):
-    cid = _company_id(user)
+    cid = await _resolve_company_id(user, data.get("companyId"), db)
     if not cid:
         raise HTTPException(status_code=400, detail="Geen bedrijf gekoppeld")
     inv = Invoice(
@@ -579,8 +633,8 @@ async def convert_offerte_to_invoice(offerte_id: str, user: User = Depends(get_c
 #  CREDITNOTA'S — document_type='creditnota'
 # ============================================================
 @router.get("/creditnotas")
-async def list_creditnotas(user: User = Depends(get_current_user), db: AsyncSession = Depends(get_db)):
-    cid = _company_id(user)
+async def list_creditnotas(company_id: str | None = None, user: User = Depends(get_current_user), db: AsyncSession = Depends(get_db)):
+    cid = await _resolve_company_id(user, company_id, db)
     q = select(Invoice).where(Invoice.document_type == "creditnota").order_by(Invoice.date.desc())
     if cid:
         q = q.where(Invoice.company_id == cid)
@@ -589,7 +643,7 @@ async def list_creditnotas(user: User = Depends(get_current_user), db: AsyncSess
 
 @router.post("/creditnotas", status_code=201)
 async def create_creditnota(data: dict, user: User = Depends(get_current_user), db: AsyncSession = Depends(get_db)):
-    cid = _company_id(user)
+    cid = await _resolve_company_id(user, data.get("companyId"), db)
     if not cid:
         raise HTTPException(status_code=400, detail="Geen bedrijf gekoppeld")
     cn = Invoice(
@@ -636,8 +690,8 @@ async def create_creditnota_from_invoice(invoice_id: str, user: User = Depends(g
 #  PRODUCTEN (catalog)
 # ============================================================
 @router.get("/producten")
-async def list_producten(user: User = Depends(get_current_user), db: AsyncSession = Depends(get_db)):
-    cid = _company_id(user)
+async def list_producten(company_id: str | None = None, user: User = Depends(get_current_user), db: AsyncSession = Depends(get_db)):
+    cid = await _resolve_company_id(user, company_id, db)
     q = select(Product).order_by(Product.sort_order, Product.name)
     if cid:
         q = q.where(Product.company_id == cid)
@@ -646,7 +700,7 @@ async def list_producten(user: User = Depends(get_current_user), db: AsyncSessio
 
 @router.post("/producten", status_code=201)
 async def create_product(data: dict, user: User = Depends(get_current_user), db: AsyncSession = Depends(get_db)):
-    cid = _company_id(user)
+    cid = await _resolve_company_id(user, data.get("companyId"), db)
     if not cid:
         raise HTTPException(status_code=400, detail="Geen bedrijf gekoppeld")
     p = Product(

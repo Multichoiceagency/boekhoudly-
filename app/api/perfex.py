@@ -15,18 +15,28 @@ from app.models.crm_cache import CrmRecord, CrmSyncRun
 from app.models.integration_connection import IntegrationConnection
 from app.services.perfex_service import PerfexCRMClient
 from app.config import get_settings
+from app.api.workspace import _resolve_company_id
 
 router = APIRouter(prefix="/perfex", tags=["Perfex CRM"])
 settings = get_settings()
 PROVIDER = "perfex"
 
 
-async def _resolve_credentials(user: User, db: AsyncSession) -> tuple[str, str] | None:
-    """Find Perfex credentials: per-company DB first, then env-var fallback."""
-    if user.company_id:
+async def _resolve_credentials(
+    user: User,
+    db: AsyncSession,
+    target_company_id: uuid.UUID | None = None,
+) -> tuple[str, str] | None:
+    """Find Perfex credentials: per-company DB first, then env-var fallback.
+
+    `target_company_id` overrides `user.company_id` so accountants switching
+    between client companies can sync the right Perfex install.
+    """
+    company_id = target_company_id or user.company_id
+    if company_id:
         result = await db.execute(
             select(IntegrationConnection).where(
-                IntegrationConnection.company_id == user.company_id,
+                IntegrationConnection.company_id == company_id,
                 IntegrationConnection.provider == PROVIDER,
             )
         )
@@ -53,8 +63,12 @@ def _client(url: str | None = None, api_key: str | None = None) -> PerfexCRMClie
         raise HTTPException(status_code=503, detail="Perfex CRM is niet geconfigureerd")
 
 
-async def _client_for_user(user: User, db: AsyncSession) -> PerfexCRMClient:
-    creds = await _resolve_credentials(user, db)
+async def _client_for_user(
+    user: User,
+    db: AsyncSession,
+    target_company_id: uuid.UUID | None = None,
+) -> PerfexCRMClient:
+    creds = await _resolve_credentials(user, db, target_company_id)
     if not creds:
         raise HTTPException(
             status_code=503,
@@ -206,17 +220,23 @@ async def sync_all(admin: User = Depends(require_admin), db: AsyncSession = Depe
 
 @router.post("/sync-to-db")
 async def sync_to_db(
+    company_id: str | None = None,
     admin: User = Depends(require_admin),
     db: AsyncSession = Depends(get_db),
 ):
     """Pull all resources from Perfex and persist them in crm_records.
 
-    Idempotent: deletes existing perfex rows for each resource then inserts
-    the fresh set. Records the run in crm_sync_runs.
+    Scoped to the caller's selected company (?company_id=...) so sub-companies
+    of an accountant keep their own caches. Only deletes + re-inserts rows
+    for that company.
     """
+    resolved = await _resolve_company_id(admin, company_id, db)
+    if not resolved:
+        raise HTTPException(status_code=400, detail="Geen bedrijf gekoppeld aan je account")
+
     run = CrmSyncRun(
         id=uuid.uuid4(),
-        company_id=admin.company_id,
+        company_id=resolved,
         provider=PROVIDER,
         status="running",
     )
@@ -224,7 +244,7 @@ async def sync_to_db(
     await db.flush()
 
     try:
-        client = await _client_for_user(admin, db)
+        client = await _client_for_user(admin, db, resolved)
         data = await client.sync_all()
     except HTTPException:
         run.status = "error"
@@ -258,7 +278,13 @@ async def sync_to_db(
     for resource, items in data.items():
         if not isinstance(items, list):
             continue
-        await db.execute(delete(CrmRecord).where(CrmRecord.provider == PROVIDER, CrmRecord.resource == resource))
+        await db.execute(
+            delete(CrmRecord).where(
+                CrmRecord.provider == PROVIDER,
+                CrmRecord.resource == resource,
+                CrmRecord.company_id == resolved,
+            )
+        )
         for item in items:
             if not isinstance(item, dict):
                 continue
@@ -267,7 +293,7 @@ async def sync_to_db(
                 continue
             db.add(CrmRecord(
                 id=uuid.uuid4(),
-                company_id=admin.company_id,
+                company_id=resolved,
                 provider=PROVIDER,
                 resource=resource,
                 external_id=ext,

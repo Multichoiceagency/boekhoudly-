@@ -24,6 +24,7 @@ from app.models.debtor import Debtor
 from app.models.integration_connection import IntegrationConnection
 from app.services.integrations import get_client
 from app.utils.auth import get_current_user
+from app.api.workspace import _resolve_company_id
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/import", tags=["Universal Import"])
@@ -463,6 +464,7 @@ def _normalize_invoice(provider: str, raw: dict, customer_names: dict) -> dict:
 @router.post("/universal/{provider}")
 async def universal_import(
     provider: str,
+    company_id: str | None = None,
     user: User = Depends(_require_manager),
     db: AsyncSession = Depends(get_db),
 ):
@@ -477,10 +479,14 @@ async def universal_import(
     4. Create Debtor + Invoice records with source={provider}
     5. Skip existing (idempotent by source+source_id)
     """
-    # Find the connection for this provider + company
-    company_id = user.company_id
-    if not company_id:
+    # Resolve which company the UI is targeting. Falls back to the user's
+    # own company if no ?company_id is passed. For accountants with multiple
+    # client companies this is critical — otherwise every import lands in
+    # the accountant's home company instead of the selected one.
+    resolved = await _resolve_company_id(user, company_id, db)
+    if not resolved:
         raise HTTPException(status_code=400, detail="Geen bedrijf gekoppeld aan je account")
+    company_id = resolved
 
     conn_result = await db.execute(
         select(IntegrationConnection).where(

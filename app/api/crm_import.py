@@ -17,6 +17,7 @@ from app.models.debtor import Debtor
 from app.models.creditor import Creditor
 from app.models.crm_cache import CrmRecord
 from app.utils.auth import get_current_user
+from app.api.workspace import _resolve_company_id
 
 router = APIRouter(prefix="/import", tags=["Import"])
 
@@ -335,11 +336,21 @@ async def import_perfex_all(
 @router.delete("/universal/{provider}/clear")
 async def clear_universal_imports(
     provider: str,
+    company_id: str | None = None,
     user: User = Depends(_require_admin),
     db: AsyncSession = Depends(get_db),
 ):
-    """Delete ALL previously imported records from a specific provider."""
-    inv_del = await db.execute(delete(Invoice).where(Invoice.source == provider))
-    deb_del = await db.execute(delete(Debtor).where(Debtor.source == provider))
+    """Delete previously imported records for this provider, scoped to the
+    caller's selected company. Without a company filter a multi-tenant admin
+    would wipe every customer's imports at once."""
+    resolved = await _resolve_company_id(user, company_id, db)
+    if not resolved:
+        raise HTTPException(status_code=400, detail="Geen bedrijf gekoppeld aan je account")
+    inv_del = await db.execute(
+        delete(Invoice).where(Invoice.source == provider, Invoice.company_id == resolved)
+    )
+    deb_del = await db.execute(
+        delete(Debtor).where(Debtor.source == provider, Debtor.company_id == resolved)
+    )
     await db.flush()
     return {"provider": provider, "deleted_invoices": inv_del.rowcount, "deleted_debtors": deb_del.rowcount}
