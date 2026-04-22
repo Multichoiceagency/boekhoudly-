@@ -42,11 +42,19 @@ class PerfexCRMClient:
     # faster when an install is slow on a particular endpoint.
     DEFAULT_TIMEOUT = 60
 
+    # Some Perfex hosts respond in <500 ms from a laptop but time out past
+    # 15 s from a Docker container on the deployment server — almost always
+    # an IPv6 connect that silently hangs before falling back to v4, or a
+    # HTTP/2 ALPN issue. We force IPv4 (AF_INET) at the transport level and
+    # disable HTTP/2 so the connection is plain HTTP/1.1 over IPv4. Works
+    # around the symptom without needing network changes on the host.
+    _transport = httpx.AsyncHTTPTransport(local_address="0.0.0.0", retries=1, http2=False)
+
     async def _request(self, method: str, endpoint: str, params: dict | None = None, json: dict | None = None, timeout: float | None = None) -> Any:
         url = f"{self.api_url}/{endpoint.lstrip('/')}"
         tmo = timeout if timeout is not None else self.DEFAULT_TIMEOUT
         try:
-            async with httpx.AsyncClient(timeout=tmo) as client:
+            async with httpx.AsyncClient(timeout=tmo, transport=self._transport, http2=False) as client:
                 response = await client.request(method, url, headers=self.headers, params=params, json=json)
         except httpx.ConnectError as e:
             # DNS/SSL/network problems have no useful `str(e)` for some variants
