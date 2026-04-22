@@ -102,6 +102,74 @@ async def test_connection_post(data: dict, current_user: User = Depends(get_curr
         return {"status": "error", "message": str(e)[:200]}
 
 
+@router.get("/ping")
+async def ping_perfex(
+    company_id: str | None = None,
+    admin: User = Depends(require_admin),
+    db: AsyncSession = Depends(get_db),
+):
+    """Diagnostic: time each layer (DNS → TCP → TLS → HTTP) from inside
+    this container to the configured Perfex host. Helps tell apart a
+    "Perfex is slow" problem from a "Coolify network is slow" problem.
+
+    Run via: GET /perfex/ping?company_id=<uuid>
+    Returns JSON with timings in ms per step + the final HTTP response
+    snapshot.
+    """
+    import asyncio, socket, ssl, time, urllib.parse
+    from app.api.workspace import _resolve_company_id
+
+    resolved = await _resolve_company_id(admin, company_id, db)
+    creds = await _resolve_credentials(admin, db, resolved)
+    if not creds:
+        raise HTTPException(status_code=404, detail="Geen Perfex koppeling")
+    url, api_key = creds
+    parsed = urllib.parse.urlparse(url if url.startswith("http") else f"https://{url}")
+    host = parsed.hostname or ""
+    port = parsed.port or (443 if parsed.scheme == "https" else 80)
+    timings: dict = {"host": host, "port": port, "scheme": parsed.scheme}
+
+    # 1. DNS
+    t0 = time.perf_counter()
+    try:
+        addrs = await asyncio.get_event_loop().getaddrinfo(host, port)
+        timings["dns_ms"] = int((time.perf_counter() - t0) * 1000)
+        timings["resolved"] = [a[4][0] for a in addrs[:5]]
+    except Exception as e:
+        timings["dns_error"] = str(e) or type(e).__name__
+        return timings
+
+    # 2. Raw TCP connect (IPv4 only, matching our PerfexCRMClient transport)
+    ipv4 = next((a[4] for a in addrs if a[0] == socket.AF_INET), None)
+    if ipv4:
+        t0 = time.perf_counter()
+        try:
+            r, w = await asyncio.wait_for(asyncio.open_connection(ipv4[0], port), timeout=10)
+            timings["tcp_connect_ms"] = int((time.perf_counter() - t0) * 1000)
+            w.close()
+            try: await w.wait_closed()
+            except Exception: pass
+        except Exception as e:
+            timings["tcp_error"] = f"{type(e).__name__}: {str(e) or ''}"
+            return timings
+
+    # 3. Full HTTP GET via our PerfexCRMClient so the transport config is identical
+    from app.services.perfex_service import PerfexCRMClient
+    try:
+        client = PerfexCRMClient(base_url=url, api_key=api_key)
+        t0 = time.perf_counter()
+        data = await client._get("customers/search/a", timeout=30)
+        timings["http_ttlb_ms"] = int((time.perf_counter() - t0) * 1000)
+        timings["http_ok"] = True
+        if isinstance(data, list):
+            timings["http_rows"] = len(data)
+    except Exception as e:
+        timings["http_ok"] = False
+        timings["http_error"] = f"{type(e).__name__}: {str(e) or ''}"
+
+    return timings
+
+
 @router.get("/summary")
 async def summary(
     admin: User = Depends(require_admin),
