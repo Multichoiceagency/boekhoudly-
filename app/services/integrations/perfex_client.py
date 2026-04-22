@@ -16,19 +16,26 @@ class PerfexClient(IntegrationClient):
     PROVIDER = "perfex"
 
     def _client(self) -> PerfexCRMClient:
-        url = self.credentials.get("url")
-        api_key = self.credentials.get("api_key")
-        if not url or not api_key:
-            raise ValueError("url en api_key zijn verplicht voor Perfex")
+        url = (self.credentials.get("url") or "").strip()
+        api_key = (self.credentials.get("api_key") or "").strip()
+        missing = []
+        if not url: missing.append("API URL")
+        if not api_key: missing.append("JWT authtoken")
+        if missing:
+            raise ValueError(
+                f"{' + '.join(missing)} ontbreekt op de opgeslagen koppeling. "
+                "Open Integraties → Perfex → Bewerken en vul het in."
+            )
         return PerfexCRMClient(base_url=url, api_key=api_key)
 
     async def test_connection(self) -> dict:
         try:
             return await self._client().test_connection()
         except ValueError as e:
-            return {"status": "error", "message": str(e)}
+            return {"status": "error", "message": str(e) or "Ongeldige koppelingsdata"}
         except Exception as e:
-            return {"status": "error", "message": f"Verbinding mislukt: {str(e)[:200]}"}
+            detail = str(e) or type(e).__name__
+            return {"status": "error", "message": f"Verbinding mislukt: {detail[:400]}"}
 
     async def list_customers(self) -> list[dict]:
         """Return customers, hydrating each with full details (address, phone,

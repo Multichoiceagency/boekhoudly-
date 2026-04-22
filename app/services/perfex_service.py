@@ -38,22 +38,59 @@ class PerfexCRMClient:
 
     async def _request(self, method: str, endpoint: str, params: dict | None = None, json: dict | None = None) -> Any:
         url = f"{self.api_url}/{endpoint.lstrip('/')}"
-        async with httpx.AsyncClient(timeout=30) as client:
-            response = await client.request(method, url, headers=self.headers, params=params, json=json)
-            if response.status_code == 401:
-                raise PermissionError("Ongeldige Perfex CRM authtoken")
-            if response.status_code == 404:
-                # Themesic API returns 404 with {status:false, message:"No data were found"}
-                # for empty result sets — treat as empty list.
-                try:
-                    body = response.json()
-                    if isinstance(body, dict) and body.get("status") is False:
-                        return []
-                except Exception:
-                    pass
-                return []
-            response.raise_for_status()
+        try:
+            async with httpx.AsyncClient(timeout=30) as client:
+                response = await client.request(method, url, headers=self.headers, params=params, json=json)
+        except httpx.ConnectError as e:
+            # DNS/SSL/network problems have no useful `str(e)` for some variants
+            # — wrap so the test-connection error surface never goes empty.
+            raise RuntimeError(f"Kan {url} niet bereiken (netwerk/DNS): {str(e) or type(e).__name__}") from e
+        except httpx.TimeoutException as e:
+            raise RuntimeError(f"Time-out bij {url} (30s)") from e
+        except httpx.HTTPError as e:
+            raise RuntimeError(f"HTTP-fout bij {url}: {str(e) or type(e).__name__}") from e
+
+        if response.status_code == 401:
+            raise PermissionError("Ongeldige Perfex CRM authtoken (401)")
+        if response.status_code == 403:
+            # Themesic returns 403 with a descriptive body ("Your API token
+            # does not have the necessay permissions...") when the token is
+            # valid but missing the right permission grant in Perfex → propagate
+            # the exact Perfex message so the user can fix it in Perfex.
+            try:
+                body = response.json() if response.text else {}
+                msg = (isinstance(body, dict) and body.get("message")) or "Toegang geweigerd door Perfex (403)"
+            except Exception:
+                msg = "Toegang geweigerd door Perfex (403)"
+            raise PermissionError(f"Perfex weigert toegang (403): {msg}")
+        if response.status_code == 404:
+            # Themesic uses 404 for TWO very different cases:
+            #   1. "Token is not found" → auth failed (wrong/expired JWT)
+            #   2. "No data were found" → auth OK, just an empty result set
+            # Inspect the body so test_connection can distinguish the two —
+            # otherwise every auth failure silently looked like "0 records".
+            try:
+                body = response.json() if response.text else {}
+                if isinstance(body, dict) and body.get("status") is False:
+                    msg = (body.get("message") or "").lower()
+                    if "token" in msg and ("not found" in msg or "invalid" in msg or "expired" in msg):
+                        raise PermissionError(f"Perfex authtoken afgewezen: {body.get('message')}")
+                    return []
+            except PermissionError:
+                raise
+            except Exception:
+                pass
+            return []
+        if response.status_code >= 400:
+            # Include status code + a slice of body for diagnosis (Perfex often
+            # returns HTML on 500, which raise_for_status otherwise swallows).
+            body_preview = (response.text or "")[:300].replace("\n", " ")
+            raise RuntimeError(f"Perfex antwoordde met HTTP {response.status_code}: {body_preview}")
+        try:
             return response.json()
+        except Exception as e:
+            body_preview = (response.text or "")[:200].replace("\n", " ")
+            raise RuntimeError(f"Ongeldige JSON van {url}: {body_preview}") from e
 
     async def _get(self, endpoint: str, params: dict | None = None) -> Any:
         return await self._request("GET", endpoint, params=params)
@@ -107,10 +144,13 @@ class PerfexCRMClient:
                 ),
                 "customer_count": len(probe),
             }
-        except PermissionError:
-            return {"status": "error", "message": "Ongeldige authtoken"}
+        except PermissionError as e:
+            return {"status": "error", "message": str(e) or "Ongeldige authtoken"}
         except Exception as e:
-            return {"status": "error", "message": f"Verbinding mislukt: {str(e)[:200]}"}
+            # Always include a non-empty detail so the UI never renders a bare
+            # "Verbinding mislukt:" with nothing after the colon.
+            detail = str(e) or type(e).__name__
+            return {"status": "error", "message": f"Verbinding mislukt: {detail[:400]}"}
 
     # Short common letters that cover virtually every Dutch company name, used
     # to fan out the /search endpoint when the bulk /<resource> endpoint isn't
